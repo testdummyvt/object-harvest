@@ -25,10 +25,10 @@ def test_image_data(test_image_path: Path) -> bytes:
 
 @pytest.fixture
 def sample_objects() -> list[ObjectItem]:
-    """Return sample ObjectItem instances for testing."""
+    """Return sample ObjectItem instances for testing (confidence removed in new schema)."""
     return [
-        ObjectItem(name="cat", confidence=0.9),
-        ObjectItem(name="dog", confidence=0.8),
+        ObjectItem(name="cat"),
+        ObjectItem(name="dog"),
         ObjectItem(name="tree"),
     ]
 
@@ -46,24 +46,14 @@ def sample_run_config(tmp_path: Path) -> RunConfig:
 
 @pytest.fixture
 def mock_vlm_response() -> dict[str, Any]:
-    """Return a mock VLM API response."""
-    return {
-        "objects": [
-            {"name": "cat", "confidence": 0.9},
-            {"name": "dog", "confidence": 0.8},
-        ]
-    }
+    """Return a mock VLM API response (string list format)."""
+    return {"objects": ["cat", "dog"]}
 
 
 @pytest.fixture
 def mock_boxes_response() -> dict[str, Any]:
-    """Return a mock boxes API response."""
-    return {
-        "boxes": [
-            {"name": "cat", "x1": 10, "y1": 15, "x2": 80, "y2": 90, "confidence": 0.9},
-            {"name": "dog", "x1": 100, "y1": 120, "x2": 180, "y2": 200, "confidence": 0.8},
-        ]
-    }
+    """Return a mock boxes API response (new dict-of-lists format)."""
+    return {"cat": [[10, 15, 80, 90]], "dog": [[100, 120, 180, 200]]}
 
 
 @pytest.fixture

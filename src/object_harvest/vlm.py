@@ -22,16 +22,14 @@ except ImportError:
     logger.debug("python-dotenv not available, using system environment variables only")
 
 PROMPT_OBJECTS = """You are an assistant that lists objects present in an image.
-Return ONLY JSON: {"objects": [{"name": "...", "confidence": 0.75}, ...]}
+Return ONLY JSON: {"objects": ["object1", "object2", "object3", ...]}
 Be concise; 1 word names when possible.
 """
 
 PROMPT_BOXES = """You are an assistant that draws bounding boxes for the given objects in an image.
-Input will include a JSON array of object names. Return ONLY JSON:
-{"boxes": [{"name": "object", "x1": 45, "y1": 60, "x2": 180, "y2": 240, "confidence": 0.8}, ...]}
-Coordinates in PIXELS with x1<x2, y1<y2 (xyxy format).
-If you only know center (x,y) and width/height (w,h), convert to xyxy as:
-  x1 = x, y1 = y, x2 = x + w, y2 = y + h.
+Input will include a JSON array of object names. Return ONLY JSON in the format:
+{"object_name_1": [[x1, y1, x2, y2], [x1, y1, x2, y2]], "object_name_2": [[x1, y1, x2, y2]], ...}
+Each object can have multiple bounding boxes. Coordinates in PIXELS with x1<x2, y1<y2 (xyxy format).
 """
 
 
@@ -79,64 +77,66 @@ class VLMClient:
         object_list: Sequence[ObjectItem],
         size: tuple[int, int] | None = None,
     ) -> tuple[list[BoxItem], str | None]:
-        json_objects = json.dumps([o.model_dump() for o in object_list])
+        # Convert object list to simple string list for the new format
+        object_names = [obj.name for obj in object_list]
+        json_objects = json.dumps(object_names)
         prompt = (
             PROMPT_BOXES
-            + f"\nOBJECTS_JSON={json_objects}\nIf giving pixel boxes use integers; image size may be provided separately."
+            + f"\nOBJECTS_JSON={json_objects}\n"
+            + "If giving pixel boxes use integers; image size may be provided separately."
         )  # size not embedded to reduce token usage
         raw = self._call_api(image_path, prompt)
-        # parse boxes
+        # parse boxes in new format: {"object_name": [[x1,y1,x2,y2], ...], ...}
         boxes: list[BoxItem] = []
         block = raw
         try:
             data = json.loads(block)
         except Exception as e:  # noqa: BLE001
             return [], f"json_load_error: {e}"
-        if isinstance(data, dict) and "boxes" in data:
-            data = data["boxes"]
-        if isinstance(data, list):
-            for b in data:
-                try:
-                    # Legacy support: if x,y,w,h given convert to xyxy
-                    if {"x", "y", "w", "h"}.issubset(b.keys()) and not {
-                        "x1",
-                        "y1",
-                        "x2",
-                        "y2",
-                    }.issubset(b.keys()):
-                        x1 = float(b.get("x"))
-                        y1 = float(b.get("y"))
-                        x2 = x1 + float(b.get("w"))
-                        y2 = y1 + float(b.get("h"))
-                    else:
-                        x1 = float(b.get("x1"))
-                        y1 = float(b.get("y1"))
-                        x2 = float(b.get("x2"))
-                        y2 = float(b.get("y2"))
-                    # If coordinates look normalized (<=1) and we have size, scale to pixels
-                    if size and max(x1, y1, x2, y2) <= 1.01:
-                        iw, ih = size
-                        x1p = x1 * iw
-                        x2p = x2 * iw
-                        y1p = y1 * ih
-                        y2p = y2 * ih
-                    else:
-                        x1p, y1p, x2p, y2p = x1, y1, x2, y2
-                    boxes.append(
-                        BoxItem(
-                            name=str(b.get("name")),
-                            x1=x1p,
-                            y1=y1p,
-                            x2=x2p,
-                            y2=y2p,
-                            confidence=float(b.get("confidence"))
-                            if b.get("confidence") is not None
-                            else None,
-                        )
-                    )
-                except Exception as e:  # noqa: BLE001
-                    logger.error("❌ Failed to parse box item: %s (%s)", b, e)
+
+        if isinstance(data, dict):
+            for object_name, bbox_list in data.items():
+                if not isinstance(bbox_list, list):
                     continue
+                for bbox in bbox_list:
+                    if not isinstance(bbox, list) or len(bbox) != 4:
+                        logger.warning(
+                            "⚠️ Skipping invalid bbox format for %s: %s", object_name, bbox
+                        )
+                        continue
+                    try:
+                        x1, y1, x2, y2 = map(float, bbox)
+
+                        # If coordinates look normalized (<=1) and we have size, scale to pixels
+                        if size and max(x1, y1, x2, y2) <= 1.01:
+                            iw, ih = size
+                            x1p = x1 * iw
+                            x2p = x2 * iw
+                            y1p = y1 * ih
+                            y2p = y2 * ih
+                        else:
+                            x1p, y1p, x2p, y2p = x1, y1, x2, y2
+
+                        boxes.append(
+                            BoxItem(
+                                name=str(object_name),
+                                x1=x1p,
+                                y1=y1p,
+                                x2=x2p,
+                                y2=y2p,
+                            )
+                        )
+                    except Exception as e:  # noqa: BLE001
+                        logger.error(
+                            "❌ Failed to parse box coordinates for %s: %s (%s)",
+                            object_name,
+                            bbox,
+                            e,
+                        )
+                        continue
+        else:
+            return [], "Expected dict format for bounding boxes"
+
         return boxes, None
 
     # --- Low-level call

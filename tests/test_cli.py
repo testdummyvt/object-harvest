@@ -37,14 +37,17 @@ class TestCLI:
                 "image_id": "test_image",
                 "path": str(img),
                 "model": cfg.model,
-                "objects": [{"name": "cat", "confidence": 0.9}],
+                "objects": [{"name": "cat"}],
                 "boxes": [],
             }
             cfg.output.write_text(json.dumps(output_record) + "\n")
 
+        # Patch in both pipeline and cli modules to be safe
         import object_harvest.pipeline as pipeline
+        import object_harvest.cli as cli_mod
 
         monkeypatch.setattr(pipeline, "process_images", fake_process_images)
+        monkeypatch.setattr(cli_mod, "process_images", fake_process_images)
 
         # Set up output file
         output_file = tmp_path / "results.jsonl"

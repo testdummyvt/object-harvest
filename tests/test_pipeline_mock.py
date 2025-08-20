@@ -34,8 +34,8 @@ class MockVLMClient:
         from object_harvest.schemas import ObjectItem
 
         return [
-            ObjectItem(name="cat", confidence=0.9),
-            ObjectItem(name="dog", confidence=0.8),
+            ObjectItem(name="cat"),
+            ObjectItem(name="dog"),
         ], None
 
     def list_boxes(
@@ -57,8 +57,8 @@ class MockVLMClient:
         from object_harvest.schemas import BoxItem
 
         return [
-            BoxItem(name="cat", x1=10, y1=15, x2=80, y2=90, confidence=0.9),
-            BoxItem(name="dog", x1=100, y1=120, x2=180, y2=200, confidence=0.8),
+            BoxItem(name="cat", x1=10, y1=15, x2=80, y2=90),
+            BoxItem(name="dog", x1=100, y1=120, x2=180, y2=200),
         ], None
 
 

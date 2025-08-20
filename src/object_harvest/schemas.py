@@ -13,7 +13,6 @@ logger = get_logger(__name__)
 
 class ObjectItem(BaseModel):
     name: str = Field(..., description="Canonical object name")
-    confidence: float | None = Field(None, ge=0, le=1)
 
 
 class BoxItem(BaseModel):
@@ -24,7 +23,6 @@ class BoxItem(BaseModel):
     y1: float = Field(..., ge=0)
     x2: float = Field(..., ge=0)
     y2: float = Field(..., ge=0)
-    confidence: float | None = Field(None, ge=0, le=1)
 
     @validator("x2")
     def _x_order(cls, v: float, values):  # noqa: D401
@@ -81,7 +79,8 @@ class RunConfig(BaseModel):
 
 
 # Parsing helpers
-import json, re  # noqa: E402
+import json  # noqa: E402
+import re  # noqa: E402
 
 
 def _extract_json_block(text: str) -> str | None:
@@ -113,18 +112,22 @@ def safe_parse_objects(raw: str) -> tuple[list[ObjectItem], str | None]:
         return [], "data_not_list"
     objs: list[ObjectItem] = []
     for item in data:
+        # Handle new string format: ["object1", "object2", ...]
+        if isinstance(item, str):
+            objs.append(ObjectItem(name=item))
+            continue
+        # Handle legacy dict format for backward compatibility
         if not isinstance(item, dict):
-            logger.warning("⚠️ Skipping non-dict item in objects list: %s", type(item).__name__)
+            logger.warning(
+                "⚠️ Skipping non-dict/non-string item in objects list: %s", type(item).__name__
+            )
             continue
         name = item.get("name") or item.get("label") or item.get("object")
         if not name:
             logger.warning("⚠️ Skipping item with missing name field: %s", item)
             continue
-        conf = item.get("confidence") or item.get("score")
         try:
-            objs.append(
-                ObjectItem(name=str(name), confidence=float(conf) if conf is not None else None)
-            )
+            objs.append(ObjectItem(name=str(name)))
         except Exception as e:  # noqa: BLE001
             logger.warning("⚠️ Failed to create ObjectItem from %s: %s", item, e)
             continue
