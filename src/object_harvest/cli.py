@@ -1,4 +1,5 @@
 """Command line interface for object-harvest."""
+
 from __future__ import annotations
 
 import argparse
@@ -11,8 +12,11 @@ from .schemas import RunConfig
 
 logger = get_logger(__name__)
 
+
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="object-harvest", description="Extract object lists & boxes with VLM")
+    p = argparse.ArgumentParser(
+        prog="object-harvest", description="Extract object lists & boxes with VLM"
+    )
     src = p.add_mutually_exclusive_group(required=True)
     src.add_argument("--source", type=Path, help="Directory of images")
     src.add_argument("--list-file", type=Path, help="Text file of image paths")
@@ -27,8 +31,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--max-images", type=int, default=None)
     return p
 
+
 def parse_env_key(env_name: str) -> str | None:
     return os.environ.get(env_name)
+
 
 def main(argv: list[str] | None = None) -> int:
     p = build_parser()
@@ -50,6 +56,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     process_images(cfg)
     return 0
+
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())

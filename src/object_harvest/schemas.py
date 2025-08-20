@@ -1,13 +1,20 @@
 """Pydantic models describing objects & run metadata."""
+
 from __future__ import annotations
 
 from pathlib import Path
 
 from pydantic import BaseModel, Field, validator
 
+from .logging import get_logger
+
+logger = get_logger(__name__)
+
+
 class ObjectItem(BaseModel):
     name: str = Field(..., description="Canonical object name")
     confidence: float | None = Field(None, ge=0, le=1)
+
 
 class BoxItem(BaseModel):
     """Bounding box in pixel xyxy format (x1,y1,x2,y2)."""
@@ -31,6 +38,7 @@ class BoxItem(BaseModel):
             raise ValueError("y2 must be > y1")
         return v
 
+
 class ImageRecord(BaseModel):
     image_id: str
     path: str
@@ -49,6 +57,7 @@ class ImageRecord(BaseModel):
     @validator("path")
     def _path_norm(cls, v: str) -> str:  # noqa: D401
         return str(Path(v))
+
 
 class RunConfig(BaseModel):
     source_dir: Path | None = None
@@ -70,8 +79,10 @@ class RunConfig(BaseModel):
             raise ValueError("threads must be > 0")
         return v
 
+
 # Parsing helpers
 import json, re  # noqa: E402
+
 
 def _extract_json_block(text: str) -> str | None:
     if not text:
@@ -88,6 +99,7 @@ def _extract_json_block(text: str) -> str | None:
         return None
     return text[start : end + 1]
 
+
 def safe_parse_objects(raw: str) -> tuple[list[ObjectItem], str | None]:
     """Attempt to parse JSON text into list[ObjectItem]. Return (objects, error_message)."""
     block = _extract_json_block(raw) or raw
@@ -102,13 +114,18 @@ def safe_parse_objects(raw: str) -> tuple[list[ObjectItem], str | None]:
     objs: list[ObjectItem] = []
     for item in data:
         if not isinstance(item, dict):
+            logger.warning("⚠️ Skipping non-dict item in objects list: %s", type(item).__name__)
             continue
         name = item.get("name") or item.get("label") or item.get("object")
         if not name:
+            logger.warning("⚠️ Skipping item with missing name field: %s", item)
             continue
         conf = item.get("confidence") or item.get("score")
         try:
-            objs.append(ObjectItem(name=str(name), confidence=float(conf) if conf is not None else None))
-        except Exception:  # noqa: BLE001
+            objs.append(
+                ObjectItem(name=str(name), confidence=float(conf) if conf is not None else None)
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("⚠️ Failed to create ObjectItem from %s: %s", item, e)
             continue
     return objs, None

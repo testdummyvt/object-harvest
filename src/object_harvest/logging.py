@@ -4,6 +4,7 @@ Usage:
     from .logging import get_logger
     logger = get_logger(__name__)
 """
+
 from __future__ import annotations
 
 import logging
@@ -18,11 +19,13 @@ _LEVEL_EMOJI: Dict[int, str] = {
     logging.CRITICAL: "🔥",
 }
 
+
 class _EmojiFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:  # noqa: D401 - simple override
         emoji = _LEVEL_EMOJI.get(record.levelno, "▫️")
         record.msg = f"{emoji} {record.msg}"
         return super().format(record)
+
 
 def get_logger(name: str | None = None) -> logging.Logger:
     """Return a module-level logger with emoji formatting applied once.

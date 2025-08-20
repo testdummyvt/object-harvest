@@ -5,6 +5,7 @@ High-level goal: Ingest images, query OpenAI-compatible Vision Language Models (
 
 Public entry points kept minimal. Most users interact through the CLI (`object-harvest`).
 """
+
 from .schemas import ObjectItem, BoxItem, ImageRecord, RunConfig  # re-export core models
 
 __all__ = [

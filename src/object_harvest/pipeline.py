@@ -1,4 +1,5 @@
 """Processing pipeline orchestrating ingestion, VLM calls, and JSONL writing."""
+
 from __future__ import annotations
 
 import time
@@ -13,6 +14,7 @@ from .vlm import VLMClient
 from .writer import JsonlWriter
 
 logger = get_logger(__name__)
+
 
 def _iter_images(cfg: RunConfig) -> Iterator[tuple[str, Path]]:
     count = 0
@@ -35,6 +37,7 @@ def _iter_images(cfg: RunConfig) -> Iterator[tuple[str, Path]]:
             if cfg.max_images and count >= cfg.max_images:
                 return
 
+
 def process_images(cfg: RunConfig) -> None:
     logger.info("🚀 Start run model=%s output=%s", cfg.model, cfg.output)
     client = VLMClient(cfg.model, api_base=cfg.api_base, api_key=cfg.api_key)
@@ -48,6 +51,7 @@ def process_images(cfg: RunConfig) -> None:
                 rec = fut.result()
                 writer.write_obj(rec.model_dump())
     logger.info("📊 Completed processing")
+
 
 def _process_single(client: VLMClient, cfg: RunConfig, image_id: str, path: Path) -> ImageRecord:
     t0 = time.time()
@@ -64,6 +68,7 @@ def _process_single(client: VLMClient, cfg: RunConfig, image_id: str, path: Path
             # obtain image size for pixel validation
             try:
                 from PIL import Image  # type: ignore
+
                 with Image.open(path) as im:
                     width, height = im.size
             except Exception:  # noqa: BLE001

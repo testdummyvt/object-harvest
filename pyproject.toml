@@ -17,6 +17,7 @@ dependencies = [
 hf = ["datasets>=2.19.0", "hf-transfer"]
 openai = ["openai>=1.0.0"]
 all = ["datasets>=2.19.0", "openai>=1.0.0", "hf-transfer"]
+test = ["pytest>=7.0.0", "pytest-cov>=4.0.0"]
 
 [project.scripts]
 object-harvest = "object_harvest.cli:main"
@@ -27,8 +28,37 @@ target-version = ["py312"]
 
 [tool.ruff]
 line-length = 100
+
+[tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "S", "W"]
 ignore = ["S101"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["S101"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "--strict-markers",
+    "--strict-config",
+    "--verbose",
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests",
+]
+
+[tool.coverage.run]
+source = ["src"]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+]

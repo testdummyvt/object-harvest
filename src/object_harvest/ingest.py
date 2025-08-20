@@ -2,6 +2,7 @@
 
 Provides generators yielding (image_id, path) pairs.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -13,10 +14,12 @@ logger = get_logger(__name__)
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 
+
 def iter_folder(folder: Path) -> Iterator[tuple[str, Path]]:
     for p in sorted(folder.rglob("*")):
         if p.is_file() and p.suffix.lower() in IMAGE_EXTS:
             yield p.stem, p
+
 
 def iter_list_file(list_file: Path) -> Iterator[tuple[str, Path]]:
     for line in list_file.read_text().splitlines():
@@ -26,7 +29,10 @@ def iter_list_file(list_file: Path) -> Iterator[tuple[str, Path]]:
         p = Path(line)
         yield p.stem, p
 
-def iter_hf_dataset(name: str, split: str = "train") -> Iterator[tuple[str, Path]]:  # pragma: no cover - optional
+
+def iter_hf_dataset(
+    name: str, split: str = "train"
+) -> Iterator[tuple[str, Path]]:  # pragma: no cover - optional
     try:
         from datasets import load_dataset  # type: ignore
     except Exception:  # noqa: BLE001
@@ -50,14 +56,16 @@ def iter_hf_dataset(name: str, split: str = "train") -> Iterator[tuple[str, Path
         # Write to a temporary file per image (inefficient but simple placeholder)
         try:
             from tempfile import NamedTemporaryFile
+
             img_path = None
             with NamedTemporaryFile(suffix=".png", delete=False) as nf:
                 img.save(nf.name)
                 img_path = Path(nf.name)
             yield tmp_id, img_path
         except Exception as e:  # noqa: BLE001
-            logger.warning("Failed to materialize image %s: %s", tmp_id, e)
+            logger.warning("⚠️ Failed to materialize image %s: %s", tmp_id, e)
             continue
+
 
 def iter_video_frames(video_path: Path) -> Iterator[tuple[str, Path]]:  # placeholder
     # TODO: implement frame extraction (ffmpeg or cv2). For now, log and yield nothing.

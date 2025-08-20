@@ -1,4 +1,5 @@
 """JSONL writer utilities."""
+
 from __future__ import annotations
 
 import json
@@ -8,6 +9,7 @@ from typing import IO, Any
 from .logging import get_logger
 
 logger = get_logger(__name__)
+
 
 class JsonlWriter:
     def __init__(self, path: Path):

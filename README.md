@@ -63,12 +63,53 @@ Output JSONL record example:
 ## Development
 Install all extras and dev tools:
 ```bash
-uv pip install -e .[all]
+uv pip install -e .[all,test]
 ```
 
-Run tests:
+### Testing
+Run all tests:
 ```bash
-pytest -q
+pytest
+```
+
+Run tests with coverage:
+```bash
+pytest --cov
+```
+
+Run specific test categories:
+```bash
+# Run only fast tests (exclude slow tests)
+pytest -m "not slow"
+
+# Run only integration tests
+pytest -m integration
+
+# Run tests in a specific file
+pytest tests/test_schemas.py
+
+# Run a specific test class
+pytest tests/test_schemas.py::TestObjectItem
+
+# Run a specific test method
+pytest tests/test_schemas.py::TestObjectItem::test_object_item_valid_creation
+```
+
+Test options and markers:
+- `slow`: Long-running tests (network calls, large datasets)
+- `integration`: Integration tests requiring external services
+- Use `-v` for verbose output
+- Use `--tb=short` for shorter tracebacks
+- Use `--lf` to run only last failed tests
+
+Generate coverage report:
+```bash
+# Terminal coverage report
+pytest --cov --cov-report=term-missing
+
+# HTML coverage report
+pytest --cov --cov-report=html
+open htmlcov/index.html
 ```
 
 Format & lint (if ruff/black installed):
