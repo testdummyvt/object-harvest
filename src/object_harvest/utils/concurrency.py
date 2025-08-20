@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import random
+import secrets
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -32,5 +32,5 @@ def run_tasks(
 
 
 def backoff_sleep(base: float, attempt: int, max_sleep: float = 10.0) -> None:
-    sleep_time = min(max_sleep, base * (2**attempt)) + random.random() * 0.5
+    sleep_time = min(max_sleep, base * (2**attempt)) + secrets.randbelow(500) / 1000.0
     time.sleep(sleep_time)
