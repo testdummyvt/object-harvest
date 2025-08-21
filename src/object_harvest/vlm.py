@@ -35,13 +35,14 @@ Output only valid JSON (no extra text, no explanation). Example:
 
 
 def _load_image_bytes(path: str) -> bytes:
-    # Ensure consistent encoding; rely on PIL to open and re-encode as PNG
+    # Ensure consistent encoding; rely on PIL to open and re-encode as JPEG
     with Image.open(path) as im:
         im = im.convert("RGB")
         from io import BytesIO
 
         buf = BytesIO()
-        im.save(buf, format="PNG")
+        # Save as JPEG with good quality; disable subsampling for better text details
+        im.save(buf, format="JPEG", quality=95, optimize=True, subsampling=0)
         return buf.getvalue()
 
 
@@ -78,7 +79,7 @@ def describe_and_list(client: VLMClient, item: Dict[str, Any]) -> Dict[str, Any]
         parts.append(
             {
                 "type": "image_url",
-                "image_url": {"url": f"data:image/png;base64,{b64}"},
+                "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
             }
         )
     else:
