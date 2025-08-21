@@ -19,7 +19,7 @@ logger = get_logger(__name__)
 def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
 	p = argparse.ArgumentParser(
 		prog="object-harvest",
-		description="Extract image descriptions and object lists from images using VLMs, outputting JSONL.",
+		description="Extract image descriptions and object lists from images using VLMs; writes one JSON per image in a run folder.",
 	)
 	p.add_argument("--input", required=True, help="Input folder of images or a text file with paths/URLs")
 	p.add_argument("--out", required=True, help="Output folder to store per-image JSON files")
