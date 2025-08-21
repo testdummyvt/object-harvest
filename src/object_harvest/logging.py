@@ -35,7 +35,9 @@ def get_logger(name: str | None = None) -> logging.Logger:
     logger = logging.getLogger(name)
     if not logger.handlers:
         handler = logging.StreamHandler(sys.stderr)
-        fmt = _EmojiFormatter("%(asctime)s | %(name)s | %(levelname)s | %(message)s", "%H:%M:%S")
+        fmt = _EmojiFormatter(
+            "%(asctime)s | %(name)s | %(levelname)s | %(message)s", "%H:%M:%S"
+        )
         handler.setFormatter(fmt)
         logger.addHandler(handler)
         logger.setLevel(logging.INFO)
