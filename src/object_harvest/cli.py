@@ -8,7 +8,7 @@ from typing import Iterable, Optional
 from object_harvest.logging import get_logger
 from object_harvest.reader import iter_images
 from object_harvest.vlm import VLMClient, describe_and_list
-from object_harvest.writer import JSONLWriter
+from object_harvest.writer import JSONDirWriter
 from object_harvest.utils import RateLimiter
 from tqdm import tqdm
 
@@ -22,7 +22,7 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
 		description="Extract image descriptions and object lists from images using VLMs, outputting JSONL.",
 	)
 	p.add_argument("--input", required=True, help="Input folder of images or a text file with paths/URLs")
-	p.add_argument("--out", required=True, help="Output JSONL file path")
+	p.add_argument("--out", required=True, help="Output folder to store per-image JSON files")
 	p.add_argument(
 		"--model",
 		default=os.getenv("OPENAI_MODEL", "qwen/qwen2.5-vl-72b-instruct"),
@@ -65,16 +65,26 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
 	items = list(iter_images(args.input, limit=args.batch if args.batch > 0 else None))
 	logger.info(f"found {len(items)} images")
 
-	writer = JSONLWriter(args.out)
+	writer = JSONDirWriter(args.out)
 	limiter = RateLimiter(rpm=args.rpm) if args.rpm and args.rpm > 0 else None
 
 	with ThreadPoolExecutor(max_workers=args.max_workers) as ex:
 		futures = [ex.submit(_process_one, client, item, limiter) for item in items]
 		for fut in tqdm(as_completed(futures), total=len(futures)):
 			rec = fut.result()
-			writer.write(rec)
+			# derive a safe filename from the image path or URL
+			image_ref = rec.get("image") or "image"
+			# use base name for file paths, or sanitized tail for URLs
+			from urllib.parse import urlparse
+			parsed = urlparse(image_ref)
+			if parsed.scheme in ("http", "https"):
+				stem = os.path.basename(parsed.path) or parsed.netloc
+			else:
+				stem = os.path.splitext(os.path.basename(image_ref))[0] or "image"
+			safe = stem.replace("/", "_").replace("\\", "_") or "image"
+			writer.write(f"{safe}", rec)
 
-	logger.info(f"done. wrote {len(items)} records → {args.out}")
+	logger.info(f"done. wrote {len(items)} JSON files under {writer.run_dir}")
 	return 0
 
 
