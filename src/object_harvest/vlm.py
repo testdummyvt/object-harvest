@@ -100,6 +100,7 @@ def describe_and_list(client: VLMClient, item: Dict[str, Any]) -> Dict[str, Any]
     content = resp.choices[0].message.content or "{}"
     try:
         import json
+
         parsed = json.loads(content)
     except Exception as e:
         logger.error(f"JSON parse error: {e}. Raw: {content[:200]}")

@@ -64,7 +64,6 @@ def _process_one(client: VLMClient, item: dict, limiter: RateLimiter | None) -> 
             "image": path,
             "description": result.get("description"),
             "objects": result.get("objects", []),
-            "bboxes": {},  # not generated in this phase
         }
     except Exception as e:  # capture errors per image
         logger.error(f"failed processing {path}: {e}")
@@ -72,7 +71,6 @@ def _process_one(client: VLMClient, item: dict, limiter: RateLimiter | None) -> 
             "image": path,
             "description": None,
             "objects": [],
-            "bboxes": {},
         }
 
 

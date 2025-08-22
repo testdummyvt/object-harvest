@@ -94,8 +94,7 @@ The CLI writes a unique run directory under `--out`, e.g. `out/run-20250822-1044
 {
   "image": "file_or_url",
   "description": "A concise one-line scene description naming all objects...",
-  "objects": ["object1", "object2", "..."],
-  "bboxes": {}
+  "objects": ["object1", "object2", "..."]
 }
 ```
 
@@ -106,7 +105,7 @@ Example filenames:
 
 ## Notes
 
-- Currently only description and object list are generated; `bboxes` is an empty object placeholder.
+- Currently only description and object list are generated.
 - A single OpenAI client is shared across threads. Use `--rpm` to avoid provider rate limits.
 - Supported image types: `.jpg`, `.jpeg`, `.png`, `.webp`, `.bmp`, `.tiff`.
 
