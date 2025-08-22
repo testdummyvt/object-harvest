@@ -31,12 +31,12 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     )
     p.add_argument(
         "--model",
-        default=os.getenv("OPENAI_MODEL", "qwen/qwen2.5-vl-72b-instruct"),
+        default=os.getenv("OBJH_MODEL", "qwen/qwen2.5-vl-72b-instruct"),
         help="Model name",
     )
     p.add_argument(
         "--api-base",
-        default=os.getenv("OPENAI_API_BASE"),
+        default=os.getenv("OBJH_API_BASE"),
         help="OpenAI-compatible base URL",
     )
     p.add_argument(
@@ -45,7 +45,7 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     p.add_argument(
         "--rpm",
         type=int,
-        default=int(os.getenv("OPENAI_RPM", "0")),
+        default=int(os.getenv("OBJH_RPM", "0")),
         help="Requests per minute throttle (0=unlimited)",
     )
     p.add_argument(

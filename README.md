@@ -7,7 +7,7 @@ Extract image descriptions and object lists from images using Vision-Language Mo
 - Inputs: folder of images or text list file (paths and/or URLs)
 - Outputs: one JSON per image under a unique run directory (run-YYYYMMDD-HHMMSS-<id>)
 - OpenAI-compatible API client (set `--api-base` for OpenRouter/others)
-- Default model: `qwen/qwen2.5-vl-72b-instruct` (override via `--model` or `OPENAI_MODEL`)
+- Default model: `qwen/qwen2.5-vl-72b-instruct` (override via `--model` or `OBJH_MODEL`)
 - Concurrency via threads + a shared RPM rate limiter (`--rpm`)
 
 ## Installation
@@ -44,10 +44,10 @@ object-harvest --help
 
 Copy `.env.example` → `.env` and set:
 
-- `OPENAI_API_KEY` (required)
-- `OPENAI_API_BASE` (optional; set for OpenRouter or self-hosted gateways)
-- `OPENAI_MODEL` (optional; defaults to `qwen/qwen2.5-vl-72b-instruct`)
-- `OPENAI_RPM` (optional; default 0 = unlimited)
+- `OBJH_API_KEY` (required)
+- `OBJH_API_BASE` (optional; set for OpenRouter or self-hosted gateways)
+- `OBJH_MODEL` (optional; defaults to `qwen/qwen2.5-vl-72b-instruct`)
+- `OBJH_RPM` (optional; default 0 = unlimited)
 
 ## Usage
 
@@ -121,6 +121,6 @@ Example filenames:
 
 ## Troubleshooting
 
-- 401/403 errors: verify `OPENAI_API_KEY` and `OPENAI_API_BASE`.
+- 401/403 errors: verify `OBJH_API_KEY` and `OBJH_API_BASE`.
 - 429 errors: reduce `--max-workers` and/or set `--rpm`.
 - Module not found: ensure `uv run -m object_harvest.cli` or `PYTHONPATH=src` when using `python -m ...`.

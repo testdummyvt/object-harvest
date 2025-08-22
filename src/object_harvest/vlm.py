@@ -12,12 +12,12 @@ from openai.types.chat import (
     ChatCompletionMessageParam,
     ChatCompletionUserMessageParam,
 )
+from dotenv import load_dotenv
 
 from object_harvest.logging import get_logger
 
-
 logger = get_logger(__name__)
-
+load_dotenv()
 
 PROMPT = """
 Produce a single JSON object with the following keys:
@@ -53,19 +53,18 @@ class VLMClient:
 
     def __post_init__(self) -> None:
         self.client = OpenAI(
-            api_key=os.environ.get("OPENAI_API_KEY"),
-            base_url=self.base_url or os.environ.get("OPENAI_API_BASE"),
+            api_key=os.environ.get("OBJH_API_KEY"),
+            base_url=self.base_url or os.environ.get("OBJH_API_BASE"),
         )
         self.provider = (
             "openai"
-            if not (self.base_url or os.environ.get("OPENAI_API_BASE"))
+            if not (self.base_url or os.environ.get("OBJH_API_BASE"))
             else "custom"
         )
 
 
 def describe_and_list(client: VLMClient, item: Dict[str, Any]) -> Dict[str, Any]:
     start = time.time()
-
     parts: list[dict] = [{"type": "text", "text": PROMPT}]
     if item.get("url"):
         parts.append(
@@ -95,14 +94,12 @@ def describe_and_list(client: VLMClient, item: Dict[str, Any]) -> Dict[str, Any]
     resp = client.client.chat.completions.create(
         model=client.model,
         messages=messages,
-        temperature=0.2,
-        max_tokens=400,
+        temperature=0.01,
+        max_tokens=1024,
     )
-
     content = resp.choices[0].message.content or "{}"
     try:
         import json
-
         parsed = json.loads(content)
     except Exception as e:
         logger.error(f"JSON parse error: {e}. Raw: {content[:200]}")
