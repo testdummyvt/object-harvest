@@ -85,6 +85,21 @@ Flags:
 - `--rpm <N>`: Requests per minute throttle shared across threads (0 = unlimited)
 - `--max-workers <N>`: Thread pool size
 - `--batch <N>`: Process only the first N items (for quick tests)
+- `--resume`: Resume a previous run by writing into an existing run-* directory and only processing images without a JSON output yet. If `--out` points to a run-* folder, it's used directly; otherwise the latest run-* under `--out` is selected.
+
+### Resume only missing outputs
+
+Continue a previous run and only process images that don't yet have a JSON file:
+
+```bash
+object-harvest --input ./images --out ./out --resume
+```
+
+You can also target a specific run directory:
+
+```bash
+object-harvest --input ./images --out ./out/run-20250822-104455-ab12cd34 --resume
+```
 
 ## Output
 

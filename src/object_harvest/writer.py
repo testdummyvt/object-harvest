@@ -28,11 +28,18 @@ class JSONDirWriter:
 
     def __init__(self, base_dir: str) -> None:
         self.base_dir = base_dir
-        os.makedirs(self.base_dir or ".", exist_ok=True)
-        ts = time.strftime("%Y%m%d-%H%M%S")
-        short = uuid.uuid4().hex[:8]
-        self.run_dir = os.path.join(self.base_dir, f"run-{ts}-{short}")
-        os.makedirs(self.run_dir, exist_ok=True)
+        # If the provided base_dir already looks like a run directory (user passed an existing
+        # run path like out/run-YYYYMMDD-HHMMSS-xxxx), then write into it directly.
+        # Otherwise, create a fresh run directory under base_dir.
+        if os.path.isdir(self.base_dir) and os.path.basename(self.base_dir).startswith("run-"):
+            self.run_dir = self.base_dir
+            os.makedirs(self.run_dir, exist_ok=True)
+        else:
+            os.makedirs(self.base_dir or ".", exist_ok=True)
+            ts = time.strftime("%Y%m%d-%H%M%S")
+            short = uuid.uuid4().hex[:8]
+            self.run_dir = os.path.join(self.base_dir, f"run-{ts}-{short}")
+            os.makedirs(self.run_dir, exist_ok=True)
 
     def write(self, filename: str, record: Dict[str, Any]) -> str:
         if not filename.endswith(".json"):

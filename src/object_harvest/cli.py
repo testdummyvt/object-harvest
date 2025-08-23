@@ -16,6 +16,17 @@ from tqdm import tqdm
 logger = get_logger(__name__)
 
 
+def _safe_stem(image_ref: str) -> str:
+    from urllib.parse import urlparse
+
+    parsed = urlparse(image_ref)
+    if parsed.scheme in ("http", "https"):
+        stem = os.path.basename(parsed.path) or parsed.netloc
+    else:
+        stem = os.path.splitext(os.path.basename(image_ref))[0] or "image"
+    return stem.replace("/", "_").replace("\\", "_") or "image"
+
+
 def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(
         prog="object-harvest",
@@ -51,6 +62,14 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     p.add_argument(
         "--batch", type=int, default=0, help="Optional batch size; 0 processes all"
     )
+    p.add_argument(
+        "--resume",
+        action="store_true",
+        help=(
+            "If set, and --out points to an existing run-* directory, only process images "
+            "that do not already have corresponding JSON outputs in that directory."
+        ),
+    )
     return p.parse_args(list(argv) if argv is not None else None)
 
 
@@ -82,27 +101,59 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     items = list(iter_images(args.input, limit=args.batch if args.batch > 0 else None))
     logger.info(f"found {len(items)} images")
 
-    writer = JSONDirWriter(args.out)
+    # Determine target run directory. For --resume, prefer the latest existing run-* under --out
+    # or use the provided run-* path directly to write into.
+    writer_base = args.out
+    if args.resume:
+        try:
+            if os.path.isdir(args.out) and not os.path.basename(args.out).startswith("run-"):
+                run_dirs = [
+                    os.path.join(args.out, d)
+                    for d in os.listdir(args.out)
+                    if d.startswith("run-") and os.path.isdir(os.path.join(args.out, d))
+                ]
+                if run_dirs:
+                    # pick most recently modified
+                    writer_base = max(run_dirs, key=os.path.getmtime)
+                    logger.info(f"resuming: writing into existing run dir {writer_base}")
+        except Exception:
+            pass
+
+    writer = JSONDirWriter(writer_base)
+    existing_stems: set[str] = set()
+    if args.resume:
+        try:
+            for name in os.listdir(writer.run_dir):
+                if name.lower().endswith(".json"):
+                    existing_stems.add(os.path.splitext(name)[0])
+        except FileNotFoundError:
+            pass
     limiter = RateLimiter(rpm=args.rpm) if args.rpm and args.rpm > 0 else None
 
     with ThreadPoolExecutor(max_workers=args.max_workers) as ex:
-        futures = [ex.submit(_process_one, client, item, limiter) for item in items]
+        futures = []
+        for item in items:
+            image_ref = item.get("path") or item.get("url") or "image"
+            safe = _safe_stem(image_ref)
+
+            if args.resume and safe in existing_stems:
+                # Skip already-processed item
+                continue
+
+            futures.append(ex.submit(_process_one, client, item, limiter))
         for fut in tqdm(as_completed(futures), total=len(futures)):
             rec = fut.result()
             # derive a safe filename from the image path or URL
             image_ref = rec.get("image") or "image"
-            # use base name for file paths, or sanitized tail for URLs
-            from urllib.parse import urlparse
-
-            parsed = urlparse(image_ref)
-            if parsed.scheme in ("http", "https"):
-                stem = os.path.basename(parsed.path) or parsed.netloc
-            else:
-                stem = os.path.splitext(os.path.basename(image_ref))[0] or "image"
-            safe = stem.replace("/", "_").replace("\\", "_") or "image"
+            safe = _safe_stem(image_ref)
             writer.write(f"{safe}", rec)
 
-    logger.info(f"done. wrote {len(items)} JSON files under {writer.run_dir}")
+    total_written = (
+        len([n for n in os.listdir(writer.run_dir) if n.lower().endswith('.json')])
+        if os.path.isdir(writer.run_dir)
+        else 0
+    )
+    logger.info(f"done. outputs under {writer.run_dir}. files present: {total_written}")
     return 0
 
 
