@@ -1,6 +1,6 @@
 # Object Harvest
 
-Extract image descriptions and object lists from images using Vision-Language Models (VLMs). Input can be a folder of images or a text file of paths/URLs. Output is one JSON file per image, saved under a unique run folder.
+Extract image descriptions and object lists from images using Vision-Language Models (VLMs). Now includes open-vocabulary detection and text synthesis. Inputs can be a folder of images or a text file of paths/URLs. Outputs are one JSON file per image, saved under a unique run folder.
 
 ## Features
 
@@ -9,6 +9,10 @@ Extract image descriptions and object lists from images using Vision-Language Mo
 - OpenAI-compatible API client (set `--api-base` for OpenRouter/others)
 - Default model: `qwen/qwen2.5-vl-72b-instruct` (override via `--model` or `OBJH_MODEL`)
 - Concurrency via threads + a shared RPM rate limiter (`--rpm`)
+- Subcommands:
+  - `describe` — image caption + objects list (existing behavior)
+  - `detect` — open-vocabulary detection (GroundingDINO/LLMDet; WIP skeleton)
+  - `synthesis` — generate a one-line description from a list of objects
 
 ## Installation
 
@@ -23,6 +27,9 @@ uv pip install -e .
 
 # Now the console script is on PATH
 object-harvest --help
+object-harvest describe --help
+object-harvest detect --help
+object-harvest synthesis --help
 ```
 
 - Option B — Run without installing (uv run):
@@ -30,6 +37,7 @@ object-harvest --help
 ```bash
 uv sync
 uv run -m object_harvest.cli --help
+uv run -m object_harvest.cli describe --help
 ```
 
 - Option C — Python venv (no uv):
@@ -51,10 +59,12 @@ Copy `.env.example` → `.env` and set:
 
 ## Usage
 
+### Describe (caption + objects)
+
 Folder of images (installed CLI):
 
 ```bash
-object-harvest \
+object-harvest describe \
   --input ./images \
   --out ./out \
   --model qwen/qwen2.5-vl-72b-instruct \
@@ -65,7 +75,7 @@ object-harvest \
 Text list file (installed CLI):
 
 ```bash
-object-harvest \
+object-harvest describe \
   --input ./list.txt \
   --out ./out
 ```
@@ -73,13 +83,13 @@ object-harvest \
 Alternative (no install):
 
 ```bash
-uv run --env-file .env -m object_harvest.cli --input ./images --out ./out
+uv run --env-file .env -m object_harvest.cli describe --input ./images --out ./out
 ```
 
-Flags:
+Flags (describe):
 
 - `--input <folder|list.txt>`: Folder of images or a text file with one path/URL per line
-- `--out <folder>`: Output directory where a run folder will be created
+- `--out <folder or out/run-*>`: Output directory where a run folder will be created (or an existing run-* dir when `--resume`)
 - `--model <name>`: Model name (default `qwen/qwen2.5-vl-72b-instruct`)
 - `--api-base <url>`: OpenAI-compatible base URL (optional)
 - `--rpm <N>`: Requests per minute throttle shared across threads (0 = unlimited)
@@ -92,13 +102,45 @@ Flags:
 Continue a previous run and only process images that don't yet have a JSON file:
 
 ```bash
-object-harvest --input ./images --out ./out --resume
+object-harvest describe --input ./images --out ./out --resume
 ```
 
 You can also target a specific run directory:
 
 ```bash
-object-harvest --input ./images --out ./out/run-20250822-104455-ab12cd34 --resume
+object-harvest describe --input ./images --out ./out/run-20250822-104455-ab12cd34 --resume
+
+### Detect (open-vocabulary detection)
+
+Use detections based on a list of objects or reuse the objects produced by a previous describe run:
+
+```bash
+object-harvest detect \
+  --input ./images \
+  --out ./detections \
+  --backend gdino \
+  --hf-model IDEAS-LAB/grounding-dino-base \
+  --from-describe ./out/run-20250822-104455-ab12cd34 \
+  --threshold 0.25 \
+  --max-workers 8 \
+  --resume
+```
+
+Notes:
+- Backend implementation is a WIP skeleton; install `transformers` and `torch` and set `--hf-model` to enable.
+- You can also provide `--objects-file` or `--objects` instead of `--from-describe`.
+
+### Synthesis (generate a one-line description from object names)
+
+Generate a description that includes N objects from a provided list:
+
+```bash
+object-harvest synthesis \
+  --objects-file ./objects.txt \
+  --n 6 \
+  --model qwen/qwen2.5-vl-72b-instruct \
+  --out ./synthesis.json
+```
 ```
 
 ## Output
@@ -120,7 +162,7 @@ Example filenames:
 
 ## Notes
 
-- Currently only description and object list are generated.
+- Describe is production-ready; detect is a scaffold to integrate models like GroundingDINO/LLMDet; synthesis uses the LLM API.
 - A single OpenAI client is shared across threads. Use `--rpm` to avoid provider rate limits.
 - Supported image types: `.jpg`, `.jpeg`, `.png`, `.webp`, `.bmp`, `.tiff`.
 
@@ -137,4 +179,6 @@ Example filenames:
 
 - 401/403 errors: verify `OBJH_API_KEY` and `OBJH_API_BASE`.
 - 429 errors: reduce `--max-workers` and/or set `--rpm`.
+- Detection backends: ensure `transformers` and `torch` are installed and the chosen HF model is available.
 - Module not found: ensure `uv run -m object_harvest.cli` or `PYTHONPATH=src` when using `python -m ...`.
+ 
