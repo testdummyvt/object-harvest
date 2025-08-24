@@ -9,6 +9,8 @@ from typing import Iterable, Optional
 from object_harvest.logging import get_logger
 from object_harvest.reader import iter_images
 from object_harvest.vlm import VLMClient, describe_and_list
+from object_harvest.synthesis import synthesize_one_line
+from object_harvest.detection import run_gdino_detection, run_vlm_detection
 from object_harvest.writer import JSONDirWriter
 from object_harvest.utils import RateLimiter
 from tqdm import tqdm
@@ -128,8 +130,10 @@ def _add_detect_parser(sub: argparse._SubParsersAction) -> None:
     )
     p.add_argument("--input", required=True, help="Input folder or a text file with paths/URLs")
     p.add_argument("--out", required=True, help="Output folder for per-image detection JSON files")
-    p.add_argument("--backend", choices=["gdino", "llmdet"], default="gdino", help="Detection backend")
+    p.add_argument("--backend", choices=["gdino", "vlm"], default="gdino", help="Detection backend")
     p.add_argument("--hf-model", default=None, help="Hugging Face model id for the chosen backend")
+    p.add_argument("--model", default=os.getenv("OBJH_MODEL", "qwen/qwen2.5-vl-72b-instruct"), help="VLM model name for --backend vlm")
+    p.add_argument("--api-base", default=os.getenv("OBJH_API_BASE"), help="OpenAI-compatible base URL for --backend vlm")
     p.add_argument("--from-describe", default=None, help="Path to a describe run-* directory to read objects per image")
     p.add_argument("--objects-file", default=None, help="Text file with one object per line to detect")
     p.add_argument("--objects", default=None, help="Comma-separated object names to detect (used if no file provided)")
@@ -164,10 +168,12 @@ def _load_describe_objects_map(run_dir: str) -> dict[str, list[str]]:
 
 
 def _detect_backend_available(backend: str) -> bool:
-    import importlib.util
+    if backend == "gdino":
+        import importlib.util
 
-    if backend in ("gdino", "llmdet"):
         return importlib.util.find_spec("transformers") is not None
+    if backend == "vlm":
+        return True
     return False
 
 
@@ -253,28 +259,43 @@ def _run_detect(args: argparse.Namespace) -> int:
 
     with ThreadPoolExecutor(max_workers=args.max_workers) as ex:
         futures = []
+        future_to_image: dict = {}
+        client_vlm = VLMClient(model=args.model, base_url=args.api_base) if args.backend == "vlm" else None
+
         for item in items:
             image_ref = item.get("path") or item.get("url") or "image"
             stem = _safe_stem(image_ref)
             if args.resume and stem in existing_stems:
                 continue
-            futures.append(
-                ex.submit(
-                    _run_detection_on_item,
-                    args.backend,
-                    args.hf_model,
-                    args.threshold,
+
+            labels = labels_for_item(item)
+            if args.backend == "gdino":
+                fut = ex.submit(
+                    run_gdino_detection,
                     item,
-                    labels_for_item(item),
-                    None,
+                    labels,
+                    args.threshold,
+                    args.hf_model,
                 )
-            )
+            elif args.backend == "vlm":
+                fut = ex.submit(
+                    run_vlm_detection,
+                    client_vlm,  # type: ignore[arg-type]
+                    item,
+                    labels,
+                )
+            else:
+                continue
+            futures.append(fut)
+            future_to_image[fut] = image_ref
 
         for fut in tqdm(as_completed(futures), total=len(futures)):
             rec = fut.result()
-            image_ref = rec.get("image") or "image"
-            safe = _safe_stem(image_ref)
-            writer.write(f"{safe}", rec)
+            image_ref = future_to_image.get(fut, "image")
+            # Standardize output shape
+            out = rec if (isinstance(rec, dict) and "image" in rec and "detections" in rec) else {"image": image_ref, "detections": rec or []}
+            safe = _safe_stem(out.get("image") or "image")
+            writer.write(f"{safe}", out)
 
     logger.info(f"done. detection outputs under {writer.run_dir}")
     return 0
@@ -297,25 +318,7 @@ def _add_synthesis_parser(sub: argparse._SubParsersAction) -> None:
 
 
 def _synthesize_text(model: str, base_url: str | None, objects: list[str], n: int) -> dict:
-    from openai import OpenAI
-    from dotenv import load_dotenv
-
-    load_dotenv()
-    client = OpenAI(api_key=os.environ.get("OBJH_API_KEY"), base_url=base_url or os.environ.get("OBJH_API_BASE"))
-    chosen = objects[:n] if n <= len(objects) else objects
-    prompt = (
-        "You are a concise captioning assistant. Using ONLY the following objects, write a single one-line vivid scene description that naturally includes all of them without lists: "
-        + ", ".join(chosen)
-        + ". Avoid meta phrases like 'in this image'."
-    )
-    resp = client.chat.completions.create(
-        model=model,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.4,
-        max_tokens=200,
-    )
-    text = (resp.choices[0].message.content or "").strip().replace("\n", " ")
-    return {"objects_used": chosen, "description": text}
+    return synthesize_one_line(objects, n, model, base_url)
 
 
 def _run_synthesis(args: argparse.Namespace) -> int:
