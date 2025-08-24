@@ -48,6 +48,7 @@ def run_gdino_detection(
     labels: Optional[List[str]],
     threshold: float = 0.25,
     hf_model: Optional[str] = None,
+    text: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Run zero-shot object detection using GroundingDINO via transformers pipeline.
 
@@ -59,15 +60,24 @@ def run_gdino_detection(
         logger.warning(f"transformers not available for gdino: {e}")
         return []
 
-    if not labels:
-        logger.warning("gdino backend requires non-empty labels (objects)")
+    if not labels and not (text and text.strip()):
+        logger.warning("gdino backend requires either non-empty labels or a text description")
         return []
 
     model_id = hf_model or os.environ.get("OBJH_GDINO_MODEL", "IDEA-Research/grounding-dino-base")
     pipe = pipeline("zero-shot-object-detection", model=model_id)
 
     image = _load_image(item)
-    outputs = pipe(image, candidate_labels=labels, threshold=threshold)
+    # Prefer text description if provided; otherwise use candidate labels
+    if text and text.strip():
+        try:
+            outputs = pipe(image, text=text, threshold=threshold)
+        except TypeError:
+            # Fallback: some implementations expect 'candidate_labels' only; try splitting text to labels
+            fallback_labels = [s.strip() for s in text.split(",") if s.strip()] or labels or []
+            outputs = pipe(image, candidate_labels=fallback_labels, threshold=threshold)
+    else:
+        outputs = pipe(image, candidate_labels=labels, threshold=threshold)
     detections: List[Dict[str, Any]] = []
     for det in outputs:
         # transformers returns bbox as dict with xmin/xmax/ymin/ymax

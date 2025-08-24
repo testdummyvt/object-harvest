@@ -137,6 +137,7 @@ def _add_detect_parser(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--from-describe", default=None, help="Path to a describe run-* directory to read objects per image")
     p.add_argument("--objects-file", default=None, help="Text file with one object per line to detect")
     p.add_argument("--objects", default=None, help="Comma-separated object names to detect (used if no file provided)")
+    p.add_argument("--text", default=None, help="Free-form object description prompt for GroundingDINO (optional)")
     p.add_argument("--threshold", type=float, default=0.25, help="Score threshold for detections")
     p.add_argument("--max-workers", type=int, default=min(32, (os.cpu_count() or 4) * 5))
     p.add_argument("--batch", type=int, default=0)
@@ -276,6 +277,7 @@ def _run_detect(args: argparse.Namespace) -> int:
                     labels,
                     args.threshold,
                     args.hf_model,
+                    args.text,
                 )
             elif args.backend == "vlm":
                 fut = ex.submit(
