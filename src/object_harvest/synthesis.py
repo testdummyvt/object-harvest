@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+import random
 from typing import List, Dict
 
 from dotenv import load_dotenv
@@ -39,7 +40,11 @@ def synthesize_one_line(objects: List[str], n: int, model: str, base_url: str | 
     cleaned = [o.strip() for o in objects if str(o).strip()]
     if not cleaned:
         raise ValueError("No objects provided")
-    chosen = cleaned[: n if n > 0 else len(cleaned)]
+    # Random sample up to N objects; if n <= 0 or n >= len(cleaned), use all
+    if n <= 0 or n >= len(cleaned):
+        chosen = list(cleaned)
+    else:
+        chosen = random.sample(cleaned, k=n)
 
     prompt = PROMPT_TEMPLATE.format(objects=", ".join(chosen))
     client = LLMClient(model=model, base_url=base_url)

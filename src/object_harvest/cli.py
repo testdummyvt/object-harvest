@@ -135,8 +135,11 @@ def _add_detect_parser(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--model", default=os.getenv("OBJH_MODEL", "qwen/qwen2.5-vl-72b-instruct"), help="VLM model name for --backend vlm")
     p.add_argument("--api-base", default=os.getenv("OBJH_API_BASE"), help="OpenAI-compatible base URL for --backend vlm")
     p.add_argument("--from-describe", default=None, help="Path to a describe run-* directory to read objects per image")
-    p.add_argument("--objects-file", default=None, help="Text file with one object per line to detect")
-    p.add_argument("--objects", default=None, help="Comma-separated object names to detect (used if no file provided)")
+    p.add_argument(
+        "--objects",
+        default=None,
+        help="Either a path to a text file (one object per line) or a comma-separated list of object names",
+    )
     p.add_argument("--text", default=None, help="Free-form object description prompt for GroundingDINO (optional)")
     p.add_argument("--threshold", type=float, default=0.25, help="Score threshold for detections")
     p.add_argument("--max-workers", type=int, default=min(32, (os.cpu_count() or 4) * 5))
@@ -166,6 +169,21 @@ def _load_describe_objects_map(run_dir: str) -> dict[str, list[str]]:
         except Exception:
             continue
     return mapping
+
+
+def _parse_objects_arg(arg: str | None) -> list[str]:
+    """Parse --objects which can be either a file path or a comma-separated list."""
+    if not arg:
+        return []
+    candidate = arg.strip()
+    # If it looks like a file path and exists, load from file
+    try:
+        if os.path.exists(candidate) and os.path.isfile(candidate):
+            return _load_objects_from_file(candidate)
+    except Exception:
+        pass
+    # Otherwise, treat as comma-separated list
+    return [s.strip() for s in candidate.split(",") if s.strip()]
 
 
 def _detect_backend_available(backend: str) -> bool:
@@ -228,10 +246,9 @@ def _run_detect(args: argparse.Namespace) -> int:
 
     # Objects source
     global_labels: list[str] | None = None
-    if args.objects_file:
-        global_labels = _load_objects_from_file(args.objects_file)
-    elif args.objects:
-        global_labels = [s.strip() for s in args.objects.split(",") if s.strip()]
+    parsed_objs = _parse_objects_arg(args.objects)
+    if parsed_objs:
+        global_labels = parsed_objs
 
     per_image_labels: dict[str, list[str]] = {}
     if args.from_describe:
@@ -310,12 +327,19 @@ def _add_synthesis_parser(sub: argparse._SubParsersAction) -> None:
         help="Generate a scene description using N objects from a given list",
         description="Use an LLM to synthesize a one-line image description that includes N objects from the provided list.",
     )
-    p.add_argument("--objects-file", default=None, help="Text file with one object per line")
-    p.add_argument("--objects", default=None, help="Comma-separated list of objects")
-    p.add_argument("--n", type=int, default=6, help="Number of objects to include in the description")
+    p.add_argument(
+        "--objects",
+        default=None,
+        help="Either a path to a text file (one object per line) or a comma-separated list of objects",
+    )
+    # Renamed for readability; keep --n as alias for backward-compat
+    p.add_argument("--num-objects", "--n", dest="num_objects", type=int, default=6, help="Number of objects to include in each description")
     p.add_argument("--model", default=os.getenv("OBJH_MODEL", "qwen/qwen2.5-vl-72b-instruct"))
     p.add_argument("--api-base", default=os.getenv("OBJH_API_BASE"))
-    p.add_argument("--out", default=None, help="Optional file path to write JSON output; if omitted, prints to stdout")
+    p.add_argument("--count", type=int, default=1, help="Number of synthetic samples to generate")
+    p.add_argument("--rpm", type=int, default=int(os.getenv("OBJH_RPM", "0")), help="Requests per minute throttle (0=unlimited)")
+    p.add_argument("--max-workers", type=int, default=min(32, (os.cpu_count() or 4) * 5))
+    p.add_argument("--out", default=None, help="Optional path to write JSON/JSONL output; if omitted, prints to stdout")
     p.set_defaults(command="synthesis")
 
 
@@ -324,26 +348,53 @@ def _synthesize_text(model: str, base_url: str | None, objects: list[str], n: in
 
 
 def _run_synthesis(args: argparse.Namespace) -> int:
-    objs: list[str] = []
-    if args.objects_file:
-        objs = _load_objects_from_file(args.objects_file)
-    elif args.objects:
-        objs = [s.strip() for s in args.objects.split(",") if s.strip()]
-    else:
-        logger.error("Provide --objects-file or --objects")
-        return 2
+    objs: list[str] = _parse_objects_arg(args.objects)
     if not objs:
-        logger.error("No objects provided after parsing inputs")
+        logger.error("Provide --objects as a file path or comma-separated list")
         return 2
 
-    rec = _synthesize_text(args.model, args.api_base, objs, args.n)
+    count = max(1, int(getattr(args, "count", 1)))
+    num_objects = int(getattr(args, "num_objects", 6))
+
+    limiter = RateLimiter(rpm=args.rpm) if getattr(args, "rpm", 0) else None
+
+    def one_sample() -> dict:
+        if limiter:
+            limiter.acquire()
+        return _synthesize_text(args.model, args.api_base, objs, num_objects)
+
+    results: list[dict] = []
+    if count == 1:
+        results = [one_sample()]
+    else:
+        with ThreadPoolExecutor(max_workers=args.max_workers) as ex:
+            futures = [ex.submit(one_sample) for _ in range(count)]
+            for fut in as_completed(futures):
+                try:
+                    results.append(fut.result())
+                except Exception as e:
+                    logger.error(f"synthesis error: {e}")
+
+    # Write output
     if args.out:
         os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
-        with open(args.out, "w", encoding="utf-8") as f:
-            json.dump(rec, f, ensure_ascii=False)
+        if count == 1:
+            with open(args.out, "w", encoding="utf-8") as f:
+                json.dump(results[0], f, ensure_ascii=False)
+        else:
+            if args.out.lower().endswith(".jsonl"):
+                with open(args.out, "w", encoding="utf-8") as f:
+                    for rec in results:
+                        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            else:
+                with open(args.out, "w", encoding="utf-8") as f:
+                    json.dump(results, f, ensure_ascii=False)
         logger.info(f"wrote {args.out}")
     else:
-        print(json.dumps(rec, ensure_ascii=False))
+        if count == 1:
+            print(json.dumps(results[0], ensure_ascii=False))
+        else:
+            print(json.dumps(results, ensure_ascii=False))
     return 0
 
 
