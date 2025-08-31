@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import time
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Iterable, Optional
 
@@ -12,7 +14,12 @@ from object_harvest.vlm import VLMClient, describe_objects_ndjson
 from object_harvest.synthesis import synthesize_one_line
 from object_harvest.detection import run_gdino_detection, run_vlm_detection
 from object_harvest.writer import JSONDirWriter
-from object_harvest.utils import RateLimiter
+from object_harvest.utils import (
+    RateLimiter,
+    append_and_maybe_flush_jsonl,
+    flush_remaining_jsonl,
+    update_tqdm_gpm,
+)
 from tqdm import tqdm
 
 logger = get_logger(__name__)
@@ -361,6 +368,12 @@ def _add_synthesis_parser(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--rpm", type=int, default=int(os.getenv("OBJH_RPM", "0")), help="Requests per minute throttle (0=unlimited)")
     p.add_argument("--max-workers", type=int, default=min(32, (os.cpu_count() or 4) * 5))
     p.add_argument("--out", default=None, help="Optional path to write JSON/JSONL output; if omitted, prints to stdout")
+    p.add_argument(
+        "--save-batch-size",
+        type=int,
+        default=0,
+        help="For .jsonl outputs, flush results to disk in batches of this size (0 disables incremental batch writes)",
+    )
     p.set_defaults(command="synthesis")
 
 
@@ -378,6 +391,7 @@ def _run_synthesis(args: argparse.Namespace) -> int:
     num_objects = int(getattr(args, "num_objects", 6))
 
     limiter = RateLimiter(rpm=args.rpm) if getattr(args, "rpm", 0) else None
+    save_batch_size = int(getattr(args, "save_batch_size", 0))
 
     def one_sample() -> dict:
         if limiter:
@@ -385,32 +399,89 @@ def _run_synthesis(args: argparse.Namespace) -> int:
         return _synthesize_text(args.model, args.api_base, objs, num_objects)
 
     results: list[dict] = []
-    if count == 1:
-        results = [one_sample()]
-    else:
-        with ThreadPoolExecutor(max_workers=args.max_workers) as ex:
-            futures = [ex.submit(one_sample) for _ in range(count)]
-            for fut in as_completed(futures):
+    start = time.time()
+    successes = 0
+    failures = 0
+    # Batch streaming only for .jsonl outputs when save_batch_size > 0
+    streaming_jsonl = bool(args.out and args.out.lower().endswith(".jsonl") and save_batch_size > 0)
+    fh = None
+    write_lock = threading.Lock()
+    current_batch: list[dict] = []
+
+    if streaming_jsonl:
+        out_dir = os.path.dirname(args.out) or "."
+        os.makedirs(out_dir, exist_ok=True)
+        fh = open(args.out, "a", encoding="utf-8")  # append mode for incremental batches
+
+    # Local adapters around utils helpers to keep call sites simple
+    def _append_or_collect(rec: dict) -> None:
+        if streaming_jsonl and fh is not None:
+            append_and_maybe_flush_jsonl(rec, fh, write_lock, current_batch, save_batch_size)
+        else:
+            results.append(rec)
+
+    def _flush_remaining() -> None:
+        if streaming_jsonl and fh is not None:
+            flush_remaining_jsonl(fh, write_lock, current_batch)
+
+    def _update_progress(pbar: tqdm) -> None:
+        update_tqdm_gpm(pbar, start, successes)
+    try:
+        if count == 1:
+            with tqdm(total=1, desc="synthesis", unit="gen") as pbar:
                 try:
-                    results.append(fut.result())
+                    rec = one_sample()
+                    successes += 1
+                    _append_or_collect(rec)
                 except Exception as e:
+                    failures += 1
                     logger.error(f"synthesis error: {e}")
+                finally:
+                    _update_progress(pbar)
+        else:
+            with ThreadPoolExecutor(max_workers=args.max_workers) as ex:
+                futures = [ex.submit(one_sample) for _ in range(count)]
+                with tqdm(total=len(futures), desc="synthesis", unit="gen") as pbar:
+                    for fut in as_completed(futures):
+                        try:
+                            rec = fut.result()
+                            successes += 1
+                            _append_or_collect(rec)
+                        except Exception as e:
+                            failures += 1
+                            logger.error(f"synthesis error: {e}")
+                        finally:
+                            _update_progress(pbar)
+        # After processing all, flush any remaining batch to disk
+        _flush_remaining()
+    finally:
+        if fh is not None:
+            fh.close()
+
+    if failures:
+        elapsed_min = max((time.time() - start) / 60.0, 1e-6)
+        gpm = successes / elapsed_min
+        logger.info(f"generated {successes}/{count} (failures={failures}), gpm={gpm:.1f}")
 
     # Write output
     if args.out:
-        os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
-        if count == 1:
-            with open(args.out, "w", encoding="utf-8") as f:
-                json.dump(results[0], f, ensure_ascii=False)
+        if streaming_jsonl:
+            # Already appended in batches
+            logger.info(f"wrote (appended) {args.out}")
         else:
-            if args.out.lower().endswith(".jsonl"):
+            os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
+            if count == 1:
                 with open(args.out, "w", encoding="utf-8") as f:
-                    for rec in results:
-                        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                    json.dump(results[0], f, ensure_ascii=False)
             else:
-                with open(args.out, "w", encoding="utf-8") as f:
-                    json.dump(results, f, ensure_ascii=False)
-        logger.info(f"wrote {args.out}")
+                if args.out.lower().endswith(".jsonl"):
+                    with open(args.out, "w", encoding="utf-8") as f:
+                        for rec in results:
+                            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                else:
+                    with open(args.out, "w", encoding="utf-8") as f:
+                        json.dump(results, f, ensure_ascii=False)
+            logger.info(f"wrote {args.out}")
     else:
         if count == 1:
             print(json.dumps(results[0], ensure_ascii=False))
