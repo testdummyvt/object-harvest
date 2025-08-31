@@ -14,7 +14,12 @@ from object_harvest.vlm import VLMClient, describe_objects_ndjson
 from object_harvest.synthesis import synthesize_one_line
 from object_harvest.detection import run_gdino_detection, run_vlm_detection
 from object_harvest.writer import JSONDirWriter
-from object_harvest.utils import RateLimiter
+from object_harvest.utils import (
+    RateLimiter,
+    append_and_maybe_flush_jsonl,
+    flush_remaining_jsonl,
+    update_tqdm_gpm,
+)
 from tqdm import tqdm
 
 logger = get_logger(__name__)
@@ -407,30 +412,32 @@ def _run_synthesis(args: argparse.Namespace) -> int:
         out_dir = os.path.dirname(args.out) or "."
         os.makedirs(out_dir, exist_ok=True)
         fh = open(args.out, "a", encoding="utf-8")  # append mode for incremental batches
+
+    # Local adapters around utils helpers to keep call sites simple
+    def _append_or_collect(rec: dict) -> None:
+        if streaming_jsonl and fh is not None:
+            append_and_maybe_flush_jsonl(rec, fh, write_lock, current_batch, save_batch_size)
+        else:
+            results.append(rec)
+
+    def _flush_remaining() -> None:
+        if streaming_jsonl and fh is not None:
+            flush_remaining_jsonl(fh, write_lock, current_batch)
+
+    def _update_progress(pbar: tqdm) -> None:
+        update_tqdm_gpm(pbar, start, successes)
     try:
         if count == 1:
             with tqdm(total=1, desc="synthesis", unit="gen") as pbar:
                 try:
                     rec = one_sample()
                     successes += 1
-                    if streaming_jsonl and fh is not None:
-                        with write_lock:
-                            current_batch.append(rec)
-                            if len(current_batch) >= save_batch_size:
-                                for r in current_batch:
-                                    fh.write(json.dumps(r, ensure_ascii=False) + "\n")
-                                fh.flush()
-                                current_batch.clear()
-                    else:
-                        results.append(rec)
+                    _append_or_collect(rec)
                 except Exception as e:
                     failures += 1
                     logger.error(f"synthesis error: {e}")
                 finally:
-                    elapsed_min = max((time.time() - start) / 60.0, 1e-6)
-                    gpm = successes / elapsed_min
-                    pbar.update(1)
-                    pbar.set_postfix(gpm=f"{gpm:.1f}")
+                    _update_progress(pbar)
         else:
             with ThreadPoolExecutor(max_workers=args.max_workers) as ex:
                 futures = [ex.submit(one_sample) for _ in range(count)]
@@ -439,31 +446,14 @@ def _run_synthesis(args: argparse.Namespace) -> int:
                         try:
                             rec = fut.result()
                             successes += 1
-                            if streaming_jsonl and fh is not None:
-                                with write_lock:
-                                    current_batch.append(rec)
-                                    if len(current_batch) >= save_batch_size:
-                                        for r in current_batch:
-                                            fh.write(json.dumps(r, ensure_ascii=False) + "\n")
-                                        fh.flush()
-                                        current_batch.clear()
-                            else:
-                                results.append(rec)
+                            _append_or_collect(rec)
                         except Exception as e:
                             failures += 1
                             logger.error(f"synthesis error: {e}")
                         finally:
-                            pbar.update(1)
-                            elapsed_min = max((time.time() - start) / 60.0, 1e-6)
-                            gpm = successes / elapsed_min
-                            pbar.set_postfix(gpm=f"{gpm:.1f}")
+                            _update_progress(pbar)
         # After processing all, flush any remaining batch to disk
-        if streaming_jsonl and fh is not None and current_batch:
-            with write_lock:
-                for r in current_batch:
-                    fh.write(json.dumps(r, ensure_ascii=False) + "\n")
-                fh.flush()
-                current_batch.clear()
+        _flush_remaining()
     finally:
         if fh is not None:
             fh.close()
