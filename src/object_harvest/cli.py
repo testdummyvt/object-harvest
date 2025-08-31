@@ -64,7 +64,10 @@ def _run_describe(args: argparse.Namespace) -> int:
     items = list(iter_images(args.input, limit=args.batch if args.batch > 0 else None))
     logger.info(f"found {len(items)} images")
 
-    # Determine run directory (resume support)
+    # Determine which run directory to use for output, supporting resume:
+    # If resume is enabled and the output directory is a directory (not already a "run-" directory),
+    # search for subdirectories starting with "run-" and, if any exist, resume into the most recently
+    # modified one. Otherwise, use the specified output directory as the base.
     writer_base = args.out
     if args.resume:
         try:
