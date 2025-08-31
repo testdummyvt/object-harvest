@@ -111,6 +111,7 @@ You can also target a specific run directory:
 
 ```bash
 object-harvest describe --input ./images --out ./out/run-20250822-104455-ab12cd34 --resume
+```
 
 ### Detect (open-vocabulary detection)
 
@@ -147,6 +148,7 @@ object-harvest synthesis \
   --max-workers 8 \
   --model qwen/qwen2.5-vl-72b-instruct \
   --out ./synthesis.jsonl
+```
 
 Flags (synthesis):
 - `--objects <file|comma,list>` unified input (file path or comma-separated list)
@@ -154,15 +156,14 @@ Flags (synthesis):
 - `--count` number of samples to generate; with `--out` ending in .jsonl, writes one JSON object per line; otherwise writes a JSON array/file
 - `--rpm`, `--max-workers` for throughput control
 - `--out` optional; if omitted, prints to stdout
-```
-```
+
 
 ## Output
 
 The CLI writes a unique run directory under `--out`, e.g. `out/run-20250822-104455-ab12cd34/`.
 
 Describe (.ndjson per image):
-```
+```json
 {"bicycle": "a blue road bike leaning against a brick wall"}
 {"person": "a man wearing a red jacket walking beside the bike"}
 {"backpack": "black backpack with a water bottle in side pocket"}
