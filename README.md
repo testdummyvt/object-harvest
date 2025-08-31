@@ -114,6 +114,8 @@ object-harvest describe --input ./images --out ./out/run-20250822-104455-ab12cd3
 
 ### Detect (open-vocabulary detection)
 
+Status: W.I.P — detection is not functional yet. The CLI and output schema are in place; implementations are pending.
+
 Use detections based on a list of objects or reuse the objects produced by a previous describe run:
 
 ```bash
@@ -179,7 +181,7 @@ Detect (.json per image):
 
 ## Notes
 
-- Describe is production-ready; detect is a scaffold to integrate models like GroundingDINO/LLMDet; synthesis uses the LLM API.
+- Describe is production-ready; detection is W.I.P and does not work as of now (implementations pending). Synthesis uses the LLM API.
 - A single OpenAI client is shared across threads. Use `--rpm` to avoid provider rate limits.
 - Supported image types: `.jpg`, `.jpeg`, `.png`, `.webp`, `.bmp`, `.tiff`.
 
