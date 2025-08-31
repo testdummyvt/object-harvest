@@ -20,7 +20,7 @@ Purpose: Extract NDJSON object suggestions from images using Vision-Language Mod
 - `writer.py` — `JSONDirWriter` creates a unique run dir and writes one file per image; supports JSON via `write` and raw NDJSON via `write_text`. `JSONLWriter` kept for legacy.
 - `utils/__init__.py` — `RateLimiter` (RPM, sliding window) for cross-thread throttling.
  - `detection.py` — `run_gdino_detection` (transformers pipeline) and `run_vlm_detection` (VLM JSON grounding) returning detections.
- - `synthesis.py` — `synthesize_one_line` to generate a caption from a list of objects.
+ - `synthesis.py` — `synthesize_one_line` generates one-line description plus per-object phrasings from a list of objects.
 
 ## Conventions/patterns
 - Environment variables (auto-loaded):
@@ -29,7 +29,7 @@ Purpose: Extract NDJSON object suggestions from images using Vision-Language Mod
 -- Image handling: open with Pillow, re-encode as JPEG, send either URL or `data:image/jpeg;base64,...`.
 - Describe outputs per image: NDJSON lines, each line a single-key JSON object `{object: description}`.
 - Detection outputs: `{ "image": str, "detections": [{ "label": str, "score": float, "bbox": {"xmin": float, "ymin": float, "xmax": float, "ymax": float} }] }` (pixel coordinates).
-- Synthesis outputs: `{ "objects_used": [str], "description": str }`.
+- Synthesis outputs: `{ "describe": str, "objects": [ {object: description}, ... ] }`.
 - Concurrency: `ThreadPoolExecutor`; share one HTTP client; throttle with `RateLimiter` (–-rpm).
 - Filenames: derived from basename or URL tail; sanitized; writer creates `out/run-YYYYMMDD-HHMMSS-<id>/`. With `--resume`, if `--out` points to a parent folder, the latest `run-*` folder is auto-selected; if `--out` is a specific `run-*` folder, it's used directly.
 

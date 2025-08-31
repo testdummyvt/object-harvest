@@ -134,9 +134,9 @@ Notes:
 - Backends: `gdino` (GroundingDINO via transformers) and `vlm` (VLM-backed detection). For `gdino`, install `transformers` and `torch` and set `--hf-model`. You can optionally pass `--text` to use a free-form description prompt.
 - Objects can come from a previous describe run (`--from-describe`) or via `--objects` (either a file path or a comma-separated list).
 
-### Synthesis (generate one-line descriptions from object names)
+### Synthesis (generate one-line description + per-object phrasings)
 
-Generate a description that includes N objects from a provided list:
+Generate a one-line description that includes N objects from a provided list, and also return a per-object description phrased the same way as in the main description:
 
 ```bash
 object-harvest synthesis \
@@ -151,7 +151,7 @@ object-harvest synthesis \
 Flags (synthesis):
 - `--objects <file|comma,list>` unified input (file path or comma-separated list)
 - `--num-objects` (alias `--n`) number of objects to include per description (random sampled)
-- `--count` number of samples to generate; with `--out` ending in .jsonl, outputs NDJSON; otherwise JSON/array
+- `--count` number of samples to generate; with `--out` ending in .jsonl, writes one JSON object per line; otherwise writes a JSON array/file
 - `--rpm`, `--max-workers` for throughput control
 - `--out` optional; if omitted, prints to stdout
 ```
@@ -175,6 +175,17 @@ Detect (.json per image):
   "detections": [
     {"label": "person", "score": 0.91, "bbox": {"xmin": 10.0, "ymin": 20.0, "xmax": 120.0, "ymax": 240.0}},
     {"label": "bicycle", "score": 0.88, "bbox": {"xmin": 40.0, "ymin": 60.0, "xmax": 300.0, "ymax": 220.0}}
+  ]
+}
+```
+
+Synthesis (.json or .jsonl records):
+```json
+{
+  "describe": "A black cat lounges on a soft fabric sofa by the window.",
+  "objects": [
+    {"cat": "black cat lounging"},
+    {"sofa": "soft fabric sofa"}
   ]
 }
 ```
