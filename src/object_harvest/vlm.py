@@ -20,18 +20,20 @@ logger = get_logger(__name__)
 load_dotenv()
 
 PROMPT = """
-Produce a single JSON object with the following keys:
+You are assisting object detection preparation. Suggest relevant objects present in the image and include people if present.
 
-"description" — a single, concise paragraph (one line; no hard newlines) that describes the scene with emphasis on all objects present. Do NOT use phrases such as "in this image", "this image is", or any similar meta phrases. Mention each object explicitly and focus on visual details.
+Output format: NDJSON (newline-delimited JSON). Emit one line per object, where each line is a single-key JSON object mapping the object name to a short natural-language description of that object as seen in the image. Do not include any extra text, headers, or code fences.
 
-"objects" — an array of strings listing every object that appears in the scene (e.g. ["object1", "object2", ...]).
+Examples (format only):
+{"bicycle": "a blue road bike leaning against a brick wall"}
+{"person": "a man wearing a red jacket walking beside the bike"}
+{"backpack": "black backpack with a water bottle in side pocket"}
 
-Output only valid JSON (no extra text, no explanation). Example:
-{
-"description": "A sunlit kitchen counter holds a stainless-steel kettle steaming beside a wooden cutting board scattered with sliced lemons and a serrated knife, a red mug rests near a potted basil plant at the windowsill.",
-"objects": ["kettle", "cutting board", "lemons", "knife", "mug", "basil plant", "windowsill"]
-}
-	""".strip()
+Rules:
+- Keys are object names (lowercase preferred). Include people when present (e.g., "person").
+- Values are concise visual descriptions specific to the image.
+- Output only NDJSON lines, nothing else.
+""".strip()
 
 
 def _load_image_bytes(path: str) -> bytes:
@@ -64,7 +66,32 @@ class VLMClient:
 
 
 def describe_and_list(client: VLMClient, item: Dict[str, Any]) -> Dict[str, Any]:
+    """Deprecated: kept for backward-compat. Now delegates to describe_objects_ndjson and returns parsed lines.
+
+    Returns {"ndjson": str, "objects": [str], "latency_ms": int}
+    """
     start = time.time()
+    ndjson_text = describe_objects_ndjson(client, item)
+    # Best-effort extract object names from NDJSON for compatibility
+    objects: list[str] = []
+    for line in (ndjson_text.splitlines()):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            import json as _json
+
+            obj = _json.loads(line)
+            if isinstance(obj, dict) and obj:
+                objects.extend(list(obj.keys()))
+        except Exception:
+            continue
+    latency_ms = int((time.time() - start) * 1000)
+    return {"ndjson": ndjson_text, "objects": objects, "latency_ms": latency_ms}
+
+
+def describe_objects_ndjson(client: VLMClient, item: Dict[str, Any]) -> str:
+    """Generate NDJSON lines mapping object name -> per-object description, including people when present."""
     parts: list[dict] = [{"type": "text", "text": PROMPT}]
     if item.get("url"):
         parts.append(
@@ -97,15 +124,18 @@ def describe_and_list(client: VLMClient, item: Dict[str, Any]) -> Dict[str, Any]
         temperature=0.01,
         max_tokens=1024,
     )
-    content = resp.choices[0].message.content or "{}"
-    try:
-        import json
-
-        parsed = json.loads(content)
-    except Exception as e:
-        logger.error(f"JSON parse error: {e}. Raw: {content[:200]}")
-        parsed = {"description": None, "objects": []}
-
-    latency_ms = int((time.time() - start) * 1000)
-    parsed["latency_ms"] = latency_ms
-    return parsed
+    content = (resp.choices[0].message.content or "").strip()
+    # Normalize to NDJSON: strip code fences and keep only lines that look like JSON objects
+    lines: list[str] = []
+    for raw in content.splitlines():
+        s = raw.strip().strip("`")
+        if not s:
+            continue
+        if not (s.startswith("{") and s.endswith("}")):
+            # ignore non-JSON lines
+            continue
+        lines.append(s)
+    if not lines:
+        # Fall back to returning raw content even if not recognized
+        return content
+    return "\n".join(lines)
