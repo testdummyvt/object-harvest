@@ -30,10 +30,10 @@ Notes: Total cost = 1,049,798 / 1,000,000 × $2 = $2.0996 (≈ $2.10). Averages 
 
 ```mermaid
 flowchart LR
-	A[Objects list] --> B[Prompt builder]
-	B --> C[Qwen3-235B Instruct]
-	C --> D[JSON result: { describe, objects[] }]
-	D --> E[Batch append to .jsonl]
+	A["Objects list"] --> B["Prompt builder"]
+	B --> C["Qwen3-235B Instruct"]
+	C --> D["JSON result: { describe, objects[] }"]
+	D --> E["Batch append to .jsonl"]
 ```
 
 ## Sample outputs
