@@ -11,7 +11,7 @@ from typing import Iterable, Optional
 from object_harvest.logging import get_logger
 from object_harvest.reader import iter_images
 from object_harvest.vlm import VLMClient, describe_objects_ndjson
-from object_harvest.synthesis import synthesize_one_line
+from object_harvest.synthesis import synthesize_one_line, LLMClient
 from object_harvest.detection import run_gdino_detection, run_vlm_detection
 from object_harvest.writer import JSONDirWriter
 from object_harvest.utils import (
@@ -377,8 +377,8 @@ def _add_synthesis_parser(sub: argparse._SubParsersAction) -> None:
     p.set_defaults(command="synthesis")
 
 
-def _synthesize_text(model: str, base_url: str | None, objects: list[str], n: int) -> dict:
-    return synthesize_one_line(objects, n, model, base_url)
+def _synthesize_text(model: str, base_url: str | None, objects: list[str], n: int, client: LLMClient | None = None) -> dict:
+    return synthesize_one_line(objects, n, model, base_url, client=client)
 
 
 def _run_synthesis(args: argparse.Namespace) -> int:
@@ -393,10 +393,13 @@ def _run_synthesis(args: argparse.Namespace) -> int:
     limiter = RateLimiter(rpm=args.rpm) if getattr(args, "rpm", 0) else None
     save_batch_size = int(getattr(args, "save_batch_size", 0))
 
+    # Create one shared LLM client to avoid opening too many connections/file descriptors
+    shared_llm_client = LLMClient(model=args.model, base_url=args.api_base)
+
     def one_sample() -> dict:
         if limiter:
             limiter.acquire()
-        return _synthesize_text(args.model, args.api_base, objs, num_objects)
+        return _synthesize_text(args.model, args.api_base, objs, num_objects, client=shared_llm_client)
 
     results: list[dict] = []
     start = time.time()

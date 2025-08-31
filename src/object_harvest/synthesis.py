@@ -38,7 +38,13 @@ class LLMClient:
         )
 
 
-def synthesize_one_line(objects: List[str], n: int, model: str, base_url: str | None) -> Dict:
+def synthesize_one_line(
+    objects: List[str],
+    n: int,
+    model: str,
+    base_url: str | None,
+    client: "LLMClient | None" = None,
+) -> Dict:
     """Generate a one-line description and per-object descriptions for up to N provided objects.
 
     Returns: { "describe": str, "objects": [ {object: description}, ... ] }
@@ -53,10 +59,10 @@ def synthesize_one_line(objects: List[str], n: int, model: str, base_url: str | 
         chosen = random.sample(cleaned, k=n)
 
     prompt = PROMPT_TEMPLATE.format(objects=", ".join(chosen))
-    client = LLMClient(model=model, base_url=base_url)
+    llm = client or LLMClient(model=model, base_url=base_url)
 
-    resp = client.client.chat.completions.create(
-        model=client.model,
+    resp = llm.client.chat.completions.create(
+        model=llm.model,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.4,
         max_tokens=200,
