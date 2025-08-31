@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import time
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Iterable, Optional
 
@@ -362,6 +363,12 @@ def _add_synthesis_parser(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--rpm", type=int, default=int(os.getenv("OBJH_RPM", "0")), help="Requests per minute throttle (0=unlimited)")
     p.add_argument("--max-workers", type=int, default=min(32, (os.cpu_count() or 4) * 5))
     p.add_argument("--out", default=None, help="Optional path to write JSON/JSONL output; if omitted, prints to stdout")
+    p.add_argument(
+        "--save-batch-size",
+        type=int,
+        default=0,
+        help="For .jsonl outputs, flush results to disk in batches of this size (0 disables incremental batch writes)",
+    )
     p.set_defaults(command="synthesis")
 
 
@@ -379,6 +386,7 @@ def _run_synthesis(args: argparse.Namespace) -> int:
     num_objects = int(getattr(args, "num_objects", 6))
 
     limiter = RateLimiter(rpm=args.rpm) if getattr(args, "rpm", 0) else None
+    save_batch_size = int(getattr(args, "save_batch_size", 0))
 
     def one_sample() -> dict:
         if limiter:
@@ -389,36 +397,76 @@ def _run_synthesis(args: argparse.Namespace) -> int:
     start = time.time()
     successes = 0
     failures = 0
-    if count == 1:
-        with tqdm(total=1, desc="synthesis", unit="gen") as pbar:
-            try:
-                res = one_sample()
-                results.append(res)
-                successes += 1
-            except Exception as e:
-                failures += 1
-                logger.error(f"synthesis error: {e}")
-            finally:
-                elapsed_min = max((time.time() - start) / 60.0, 1e-6)
-                gpm = successes / elapsed_min
-                pbar.update(1)
-                pbar.set_postfix(gpm=f"{gpm:.1f}")
-    else:
-        with ThreadPoolExecutor(max_workers=args.max_workers) as ex:
-            futures = [ex.submit(one_sample) for _ in range(count)]
-            with tqdm(total=len(futures), desc="synthesis", unit="gen") as pbar:
-                for fut in as_completed(futures):
-                    try:
-                        results.append(fut.result())
-                        successes += 1
-                    except Exception as e:
-                        failures += 1
-                        logger.error(f"synthesis error: {e}")
-                    finally:
-                        pbar.update(1)
-                        elapsed_min = max((time.time() - start) / 60.0, 1e-6)
-                        gpm = successes / elapsed_min
-                        pbar.set_postfix(gpm=f"{gpm:.1f}")
+    # Batch streaming only for .jsonl outputs when save_batch_size > 0
+    streaming_jsonl = bool(args.out and args.out.lower().endswith(".jsonl") and save_batch_size > 0)
+    fh = None
+    write_lock = threading.Lock()
+    current_batch: list[dict] = []
+
+    if streaming_jsonl:
+        out_dir = os.path.dirname(args.out) or "."
+        os.makedirs(out_dir, exist_ok=True)
+        fh = open(args.out, "a", encoding="utf-8")  # append mode for incremental batches
+    try:
+        if count == 1:
+            with tqdm(total=1, desc="synthesis", unit="gen") as pbar:
+                try:
+                    rec = one_sample()
+                    successes += 1
+                    if streaming_jsonl and fh is not None:
+                        with write_lock:
+                            current_batch.append(rec)
+                            if len(current_batch) >= save_batch_size:
+                                for r in current_batch:
+                                    fh.write(json.dumps(r, ensure_ascii=False) + "\n")
+                                fh.flush()
+                                current_batch.clear()
+                    else:
+                        results.append(rec)
+                except Exception as e:
+                    failures += 1
+                    logger.error(f"synthesis error: {e}")
+                finally:
+                    elapsed_min = max((time.time() - start) / 60.0, 1e-6)
+                    gpm = successes / elapsed_min
+                    pbar.update(1)
+                    pbar.set_postfix(gpm=f"{gpm:.1f}")
+        else:
+            with ThreadPoolExecutor(max_workers=args.max_workers) as ex:
+                futures = [ex.submit(one_sample) for _ in range(count)]
+                with tqdm(total=len(futures), desc="synthesis", unit="gen") as pbar:
+                    for fut in as_completed(futures):
+                        try:
+                            rec = fut.result()
+                            successes += 1
+                            if streaming_jsonl and fh is not None:
+                                with write_lock:
+                                    current_batch.append(rec)
+                                    if len(current_batch) >= save_batch_size:
+                                        for r in current_batch:
+                                            fh.write(json.dumps(r, ensure_ascii=False) + "\n")
+                                        fh.flush()
+                                        current_batch.clear()
+                            else:
+                                results.append(rec)
+                        except Exception as e:
+                            failures += 1
+                            logger.error(f"synthesis error: {e}")
+                        finally:
+                            pbar.update(1)
+                            elapsed_min = max((time.time() - start) / 60.0, 1e-6)
+                            gpm = successes / elapsed_min
+                            pbar.set_postfix(gpm=f"{gpm:.1f}")
+        # After processing all, flush any remaining batch to disk
+        if streaming_jsonl and fh is not None and current_batch:
+            with write_lock:
+                for r in current_batch:
+                    fh.write(json.dumps(r, ensure_ascii=False) + "\n")
+                fh.flush()
+                current_batch.clear()
+    finally:
+        if fh is not None:
+            fh.close()
 
     if failures:
         elapsed_min = max((time.time() - start) / 60.0, 1e-6)
@@ -427,19 +475,23 @@ def _run_synthesis(args: argparse.Namespace) -> int:
 
     # Write output
     if args.out:
-        os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
-        if count == 1:
-            with open(args.out, "w", encoding="utf-8") as f:
-                json.dump(results[0], f, ensure_ascii=False)
+        if streaming_jsonl:
+            # Already appended in batches
+            logger.info(f"wrote (appended) {args.out}")
         else:
-            if args.out.lower().endswith(".jsonl"):
+            os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
+            if count == 1:
                 with open(args.out, "w", encoding="utf-8") as f:
-                    for rec in results:
-                        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                    json.dump(results[0], f, ensure_ascii=False)
             else:
-                with open(args.out, "w", encoding="utf-8") as f:
-                    json.dump(results, f, ensure_ascii=False)
-        logger.info(f"wrote {args.out}")
+                if args.out.lower().endswith(".jsonl"):
+                    with open(args.out, "w", encoding="utf-8") as f:
+                        for rec in results:
+                            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                else:
+                    with open(args.out, "w", encoding="utf-8") as f:
+                        json.dump(results, f, ensure_ascii=False)
+            logger.info(f"wrote {args.out}")
     else:
         if count == 1:
             print(json.dumps(results[0], ensure_ascii=False))
