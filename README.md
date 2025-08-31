@@ -1,18 +1,20 @@
 # Object Harvest
 
-Extract image descriptions and object lists from images using Vision-Language Models (VLMs). Now includes open-vocabulary detection and text synthesis. Inputs can be a folder of images or a text file of paths/URLs. Outputs are one JSON file per image, saved under a unique run folder.
+Extract object suggestions from images using Vision-Language Models (VLMs), perform open-vocabulary detection, and synthesize descriptions. Inputs can be a folder of images or a text file of paths/URLs. Describe now writes one NDJSON file per image (one JSON object per line), saved under a unique run folder.
 
 ## Features
 
 - Inputs: folder of images or text list file (paths and/or URLs)
-- Outputs: one JSON per image under a unique run directory (run-YYYYMMDD-HHMMSS-<id>)
+- Outputs: one file per image under a unique run directory (run-YYYYMMDD-HHMMSS-<id>)
+  - Describe: .ndjson (one line per object: {"object": "short description"})
+  - Detect: .json (detections array with XYXY pixel bboxes)
 - OpenAI-compatible API client (set `--api-base` for OpenRouter/others)
 - Default model: `qwen/qwen2.5-vl-72b-instruct` (override via `--model` or `OBJH_MODEL`)
 - Concurrency via threads + a shared RPM rate limiter (`--rpm`)
 - Subcommands:
-  - `describe` — image caption + objects list (existing behavior)
-  - `detect` — open-vocabulary detection (GroundingDINO/LLMDet; WIP skeleton)
-  - `synthesis` — generate a one-line description from a list of objects
+  - `describe` — suggest objects as NDJSON lines (includes people when present)
+  - `detect` — open-vocabulary detection via GroundingDINO or VLM-backed detection
+  - `synthesis` — generate one-line descriptions from a list of objects
 
 ## Installation
 
@@ -59,7 +61,7 @@ Copy `.env.example` → `.env` and set:
 
 ## Usage
 
-### Describe (caption + objects)
+### Describe (object suggestions as NDJSON)
 
 Folder of images (installed CLI):
 
@@ -95,11 +97,11 @@ Flags (describe):
 - `--rpm <N>`: Requests per minute throttle shared across threads (0 = unlimited)
 - `--max-workers <N>`: Thread pool size
 - `--batch <N>`: Process only the first N items (for quick tests)
-- `--resume`: Resume a previous run by writing into an existing run-* directory and only processing images without a JSON output yet. If `--out` points to a run-* folder, it's used directly; otherwise the latest run-* under `--out` is selected.
+- `--resume`: Resume a previous run by writing into an existing run-* directory and only processing images without an NDJSON/JSON output yet. If `--out` points to a run-* folder, it's used directly; otherwise the latest run-* under `--out` is selected.
 
 ### Resume only missing outputs
 
-Continue a previous run and only process images that don't yet have a JSON file:
+Continue a previous run and only process images that don't yet have an output file:
 
 ```bash
 object-harvest describe --input ./images --out ./out --resume
@@ -127,38 +129,53 @@ object-harvest detect \
 ```
 
 Notes:
-- Backend implementation is a WIP skeleton; install `transformers` and `torch` and set `--hf-model` to enable.
-- You can also provide `--objects-file` or `--objects` instead of `--from-describe`.
+- Backends: `gdino` (GroundingDINO via transformers) and `vlm` (VLM-backed detection). For `gdino`, install `transformers` and `torch` and set `--hf-model`. You can optionally pass `--text` to use a free-form description prompt.
+- Objects can come from a previous describe run (`--from-describe`) or via `--objects` (either a file path or a comma-separated list).
 
-### Synthesis (generate a one-line description from object names)
+### Synthesis (generate one-line descriptions from object names)
 
 Generate a description that includes N objects from a provided list:
 
 ```bash
 object-harvest synthesis \
-  --objects-file ./objects.txt \
-  --n 6 \
+  --objects ./objects.txt \
+  --num-objects 6 \
+  --count 10 \
+  --rpm 60 \
+  --max-workers 8 \
   --model qwen/qwen2.5-vl-72b-instruct \
-  --out ./synthesis.json
+  --out ./synthesis.jsonl
+
+Flags (synthesis):
+- `--objects <file|comma,list>` unified input (file path or comma-separated list)
+- `--num-objects` (alias `--n`) number of objects to include per description (random sampled)
+- `--count` number of samples to generate; with `--out` ending in .jsonl, outputs NDJSON; otherwise JSON/array
+- `--rpm`, `--max-workers` for throughput control
+- `--out` optional; if omitted, prints to stdout
 ```
 ```
 
 ## Output
 
-The CLI writes a unique run directory under `--out`, e.g. `out/run-20250822-104455-ab12cd34/`, with one JSON per image. Each file conforms to:
+The CLI writes a unique run directory under `--out`, e.g. `out/run-20250822-104455-ab12cd34/`.
 
+Describe (.ndjson per image):
+```
+{"bicycle": "a blue road bike leaning against a brick wall"}
+{"person": "a man wearing a red jacket walking beside the bike"}
+{"backpack": "black backpack with a water bottle in side pocket"}
+```
+
+Detect (.json per image):
 ```json
 {
   "image": "file_or_url",
-  "description": "A concise one-line scene description naming all objects...",
-  "objects": ["object1", "object2", "..."]
+  "detections": [
+    {"label": "person", "score": 0.91, "bbox": {"xmin": 10.0, "ymin": 20.0, "xmax": 120.0, "ymax": 240.0}},
+    {"label": "bicycle", "score": 0.88, "bbox": {"xmin": 40.0, "ymin": 60.0, "xmax": 300.0, "ymax": 220.0}}
+  ]
 }
 ```
-
-Example filenames:
-
-- For local paths: `cat_photo.json` (derived from basename)
-- For URLs: `photo.jpg.json` (derived from URL path)
 
 ## Notes
 
@@ -171,8 +188,8 @@ Example filenames:
 - Code lives in `src/object_harvest/`.
   - `cli.py`: argument parsing and orchestration
   - `reader.py`: iterates inputs (folder or list file)
-  - `vlm.py`: OpenAI-compatible client and prompt logic
-  - `writer.py`: writes per-image JSON files to a unique run directory
+  - `vlm.py`: OpenAI-compatible client and prompt logic (NDJSON for describe)
+  - `writer.py`: writes per-image JSON files; also supports raw NDJSON via `write_text`
   - `logging.py`: emoji-prefixed logger (use `get_logger(__name__)`)
 
 ## Troubleshooting

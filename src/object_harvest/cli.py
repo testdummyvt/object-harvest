@@ -8,7 +8,7 @@ from typing import Iterable, Optional
 
 from object_harvest.logging import get_logger
 from object_harvest.reader import iter_images
-from object_harvest.vlm import VLMClient, describe_and_list
+from object_harvest.vlm import VLMClient, describe_objects_ndjson
 from object_harvest.synthesis import synthesize_one_line
 from object_harvest.detection import run_gdino_detection, run_vlm_detection
 from object_harvest.writer import JSONDirWriter
@@ -33,11 +33,11 @@ def _safe_stem(image_ref: str) -> str:
 def _add_describe_parser(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser(
         "describe",
-        help="Describe images and list objects (per-image JSON outputs)",
-        description="Extract image descriptions and object lists from images using VLMs; writes one JSON per image in a run folder.",
+    help="Suggest objects per image as NDJSON lines (object -> short description)",
+    description="Generate NDJSON per image: each line is {\"object\": \"object description\"}. Includes people when present.",
     )
     p.add_argument("--input", required=True, help="Input folder or a text file with paths/URLs")
-    p.add_argument("--out", required=True, help="Output folder for per-image JSON files")
+    p.add_argument("--out", required=True, help="Output folder for per-image NDJSON files")
     p.add_argument("--model", default=os.getenv("OBJH_MODEL", "qwen/qwen2.5-vl-72b-instruct"))
     p.add_argument("--api-base", default=os.getenv("OBJH_API_BASE"), help="OpenAI-compatible base URL")
     p.add_argument("--max-workers", type=int, default=min(32, (os.cpu_count() or 4) * 5))
@@ -52,15 +52,11 @@ def _process_one_describe(client: VLMClient, item: dict, limiter: RateLimiter | 
     try:
         if limiter:
             limiter.acquire()
-        result = describe_and_list(client, item)
-        return {
-            "image": path,
-            "description": result.get("description"),
-            "objects": result.get("objects", []),
-        }
+        ndjson_text = describe_objects_ndjson(client, item)
+        return {"image": path, "ndjson": ndjson_text}
     except Exception as e:
         logger.error(f"failed processing {path}: {e}")
-        return {"image": path, "description": None, "objects": []}
+        return {"image": path, "ndjson": ""}
 
 
 def _run_describe(args: argparse.Namespace) -> int:
@@ -89,7 +85,7 @@ def _run_describe(args: argparse.Namespace) -> int:
     if args.resume:
         try:
             for name in os.listdir(writer.run_dir):
-                if name.lower().endswith(".json"):
+                if name.lower().endswith((".ndjson", ".json")):
                     existing_stems.add(os.path.splitext(name)[0])
         except FileNotFoundError:
             pass
@@ -108,10 +104,12 @@ def _run_describe(args: argparse.Namespace) -> int:
             rec = fut.result()
             image_ref = rec.get("image") or "image"
             safe = _safe_stem(image_ref)
-            writer.write(f"{safe}", rec)
+            # Write NDJSON file per image
+            nd = rec.get("ndjson", "") if isinstance(rec, dict) else ""
+            writer.write_text(f"{safe}", nd, ext=".ndjson")
 
     total_written = (
-        len([n for n in os.listdir(writer.run_dir) if n.lower().endswith(".json")])
+        len([n for n in os.listdir(writer.run_dir) if n.lower().endswith((".ndjson", ".json"))])
         if os.path.isdir(writer.run_dir)
         else 0
     )
@@ -157,15 +155,35 @@ def _load_describe_objects_map(run_dir: str) -> dict[str, list[str]]:
     """Map safe stem -> objects[] from a describe run dir."""
     mapping: dict[str, list[str]] = {}
     for name in os.listdir(run_dir):
-        if not name.lower().endswith(".json"):
+        if not name.lower().endswith((".json", ".ndjson")):
             continue
         stem = os.path.splitext(name)[0]
         try:
-            with open(os.path.join(run_dir, name), "r", encoding="utf-8") as f:
-                data = json.load(f)
-            objs = data.get("objects") or []
-            if isinstance(objs, list):
-                mapping[stem] = [str(o) for o in objs]
+            path = os.path.join(run_dir, name)
+            if name.lower().endswith(".json"):
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                objs = data.get("objects") or []
+                if isinstance(objs, list):
+                    mapping[stem] = [str(o) for o in objs]
+            else:
+                # NDJSON: collect keys per line
+                import json as _json
+
+                labels: list[str] = []
+                with open(path, "r", encoding="utf-8") as f:
+                    for ln in f:
+                        ln = ln.strip()
+                        if not ln:
+                            continue
+                        try:
+                            obj = _json.loads(ln)
+                            if isinstance(obj, dict) and obj:
+                                labels.extend([str(k) for k in obj.keys()])
+                        except Exception:
+                            continue
+                if labels:
+                    mapping[stem] = labels
         except Exception:
             continue
     return mapping

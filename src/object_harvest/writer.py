@@ -48,3 +48,11 @@ class JSONDirWriter:
         with open(path, "w", encoding="utf-8") as f:
             json.dump(record, f, ensure_ascii=False)
         return path
+
+    def write_text(self, filename: str, text: str, ext: str = ".ndjson") -> str:
+        if not filename.endswith(ext):
+            filename = f"{filename}{ext}"
+        path = os.path.join(self.run_dir, filename)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text if text.endswith("\n") else text + "\n")
+        return path
