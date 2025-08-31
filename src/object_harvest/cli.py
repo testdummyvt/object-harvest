@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Iterable, Optional
 
@@ -385,16 +386,44 @@ def _run_synthesis(args: argparse.Namespace) -> int:
         return _synthesize_text(args.model, args.api_base, objs, num_objects)
 
     results: list[dict] = []
+    start = time.time()
+    successes = 0
+    failures = 0
     if count == 1:
-        results = [one_sample()]
+        with tqdm(total=1, desc="synthesis", unit="gen") as pbar:
+            try:
+                res = one_sample()
+                results.append(res)
+                successes += 1
+            except Exception as e:
+                failures += 1
+                logger.error(f"synthesis error: {e}")
+            finally:
+                elapsed_min = max((time.time() - start) / 60.0, 1e-6)
+                gpm = successes / elapsed_min
+                pbar.update(1)
+                pbar.set_postfix(gpm=f"{gpm:.1f}")
     else:
         with ThreadPoolExecutor(max_workers=args.max_workers) as ex:
             futures = [ex.submit(one_sample) for _ in range(count)]
-            for fut in as_completed(futures):
-                try:
-                    results.append(fut.result())
-                except Exception as e:
-                    logger.error(f"synthesis error: {e}")
+            with tqdm(total=len(futures), desc="synthesis", unit="gen") as pbar:
+                for fut in as_completed(futures):
+                    try:
+                        results.append(fut.result())
+                        successes += 1
+                    except Exception as e:
+                        failures += 1
+                        logger.error(f"synthesis error: {e}")
+                    finally:
+                        pbar.update(1)
+                        elapsed_min = max((time.time() - start) / 60.0, 1e-6)
+                        gpm = successes / elapsed_min
+                        pbar.set_postfix(gpm=f"{gpm:.1f}")
+
+    if failures:
+        elapsed_min = max((time.time() - start) / 60.0, 1e-6)
+        gpm = successes / elapsed_min
+        logger.info(f"generated {successes}/{count} (failures={failures}), gpm={gpm:.1f}")
 
     # Write output
     if args.out:
