@@ -433,7 +433,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     cmd = getattr(args, "command", None)
     if cmd is None:
         # Default to 'describe' if no subcommand
-        return _run_describe(parse_args(["describe", *([] if argv is None else list(argv))]))
+        describe_argv = ["describe"] + ([] if argv is None else list(argv))
+        return _run_describe(parse_args(describe_argv))
 
     if cmd == "describe":
         return _run_describe(args)
