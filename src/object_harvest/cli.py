@@ -21,20 +21,11 @@ from object_harvest.utils import (
     flush_remaining_jsonl,
     update_tqdm_gpm,
 )
+from object_harvest.utils.paths import safe_stem
+from object_harvest.utils.runs import resolve_run_dir_base
 from tqdm import tqdm
 
 logger = get_logger(__name__)
-
-
-def _safe_stem(image_ref: str) -> str:
-    from urllib.parse import urlparse
-
-    parsed = urlparse(image_ref)
-    if parsed.scheme in ("http", "https"):
-        stem = os.path.basename(parsed.path) or parsed.netloc
-    else:
-        stem = os.path.splitext(os.path.basename(image_ref))[0] or "image"
-    return stem.replace("/", "_").replace("\\", "_") or "image"
 
 
 # ----------------------- Describe subcommand -----------------------
@@ -97,26 +88,10 @@ def _run_describe(args: argparse.Namespace) -> int:
     items = list(iter_images(args.input, limit=args.batch if args.batch > 0 else None))
     logger.info(f"found {len(items)} images")
 
-    # Determine which run directory to use for output, supporting resume:
-    # If resume is enabled and the output directory is a directory (not already a "run-" directory),
-    # search for subdirectories starting with "run-" and, if any exist, resume into the most recently
-    # modified one. Otherwise, use the specified output directory as the base.
-    writer_base = args.out
-    if args.resume:
-        try:
-            if os.path.isdir(args.out) and not os.path.basename(args.out).startswith(
-                "run-"
-            ):
-                run_dirs = [
-                    os.path.join(args.out, d)
-                    for d in os.listdir(args.out)
-                    if d.startswith("run-") and os.path.isdir(os.path.join(args.out, d))
-                ]
-                if run_dirs:
-                    writer_base = max(run_dirs, key=os.path.getmtime)
-                    logger.info(f"resuming into {writer_base}")
-        except Exception:
-            pass
+    # Resolve output base dir with resume support
+    writer_base = resolve_run_dir_base(args.out, args.resume)
+    if writer_base != args.out and args.resume:
+        logger.info(f"resuming into {writer_base}")
 
     writer = JSONDirWriter(writer_base)
     existing_stems: set[str] = set()
@@ -133,7 +108,7 @@ def _run_describe(args: argparse.Namespace) -> int:
         futures = []
         for item in items:
             image_ref = item.get("path") or item.get("url") or "image"
-            safe = _safe_stem(image_ref)
+            safe = safe_stem(image_ref)
             if args.resume and safe in existing_stems:
                 continue
             futures.append(ex.submit(_process_one_describe, client, item, limiter))
@@ -141,7 +116,7 @@ def _run_describe(args: argparse.Namespace) -> int:
         for fut in tqdm(as_completed(futures), total=len(futures)):
             rec = fut.result()
             image_ref = rec.get("image") or "image"
-            safe = _safe_stem(image_ref)
+            safe = safe_stem(image_ref)
             # Write NDJSON file per image
             nd = rec.get("ndjson", "") if isinstance(rec, dict) else ""
             writer.write_text(f"{safe}", nd, ext=".ndjson")
@@ -313,22 +288,9 @@ def _run_detection_on_item(
 
 def _run_detect(args: argparse.Namespace) -> int:
     # Resolve run dir for outputs with resume support
-    writer_base = args.out
-    if args.resume:
-        try:
-            if os.path.isdir(args.out) and not os.path.basename(args.out).startswith(
-                "run-"
-            ):
-                run_dirs = [
-                    os.path.join(args.out, d)
-                    for d in os.listdir(args.out)
-                    if d.startswith("run-") and os.path.isdir(os.path.join(args.out, d))
-                ]
-                if run_dirs:
-                    writer_base = max(run_dirs, key=os.path.getmtime)
-                    logger.info(f"resuming into {writer_base}")
-        except Exception:
-            pass
+    writer_base = resolve_run_dir_base(args.out, args.resume)
+    if writer_base != args.out and args.resume:
+        logger.info(f"resuming into {writer_base}")
     writer = JSONDirWriter(writer_base)
 
     existing_stems: set[str] = set()
@@ -349,18 +311,7 @@ def _run_detect(args: argparse.Namespace) -> int:
     per_image_labels: dict[str, list[str]] = {}
     if args.from_describe:
         # if path points to parent folder, auto-pick latest run
-        src = args.from_describe
-        if os.path.isdir(src) and not os.path.basename(src).startswith("run-"):
-            try:
-                run_dirs = [
-                    os.path.join(src, d)
-                    for d in os.listdir(src)
-                    if d.startswith("run-") and os.path.isdir(os.path.join(src, d))
-                ]
-                if run_dirs:
-                    src = max(run_dirs, key=os.path.getmtime)
-            except Exception:
-                pass
+        src = resolve_run_dir_base(args.from_describe, True)
         per_image_labels = _load_describe_objects_map(src)
 
     items = list(iter_images(args.input, limit=args.batch if args.batch > 0 else None))
@@ -368,7 +319,7 @@ def _run_detect(args: argparse.Namespace) -> int:
 
     def labels_for_item(item: dict) -> list[str] | None:
         image_ref = item.get("path") or item.get("url") or "image"
-        stem = _safe_stem(image_ref)
+        stem = safe_stem(image_ref)
         return per_image_labels.get(stem) or global_labels
 
     with ThreadPoolExecutor(max_workers=args.max_workers) as ex:
@@ -382,7 +333,7 @@ def _run_detect(args: argparse.Namespace) -> int:
 
         for item in items:
             image_ref = item.get("path") or item.get("url") or "image"
-            stem = _safe_stem(image_ref)
+            stem = safe_stem(image_ref)
             if args.resume and stem in existing_stems:
                 continue
 
@@ -417,7 +368,7 @@ def _run_detect(args: argparse.Namespace) -> int:
             if (isinstance(rec, dict) and "image" in rec and "detections" in rec)
             else {"image": image_ref, "detections": rec or []}
         )
-        safe = _safe_stem(out.get("image") or "image")
+        safe = safe_stem(out.get("image") or "image")
         writer.write(f"{safe}", out)
 
     logger.info(f"done. detection outputs under {writer.run_dir}")

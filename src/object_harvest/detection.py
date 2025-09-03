@@ -4,15 +4,14 @@ from __future__ import annotations
 
 import json
 import os
-from io import BytesIO
 from typing import Any, Dict, List, Optional
 
 from PIL import Image
 from dotenv import load_dotenv
 
 from object_harvest.logging import get_logger
-from object_harvest.vlm import _load_image_bytes  # reuse JPEG re-encode
 from object_harvest.utils.clients import AIClient
+from object_harvest.utils.images import load_image_from_item, image_part_from_item
 
 logger = get_logger(__name__)
 load_dotenv()
@@ -32,16 +31,8 @@ def _as_float(v: Any, default: float = 0.0) -> float:
 
 
 def _load_image(item: Dict[str, Any]) -> Image.Image:
-    if item.get("path"):
-        return Image.open(item["path"]).convert("RGB")
-    if item.get("url"):
-        # Fetch via stdlib to avoid adding dependencies
-        import urllib.request
-
-        with urllib.request.urlopen(item["url"]) as resp:
-            data = resp.read()
-        return Image.open(BytesIO(data)).convert("RGB")
-    raise ValueError("item must include 'path' or 'url'")
+    # Backward-compat shim; delegate to utils helper
+    return load_image_from_item(item)
 
 
 def run_gdino_detection(
@@ -116,7 +107,6 @@ def run_vlm_detection(
     item: Dict[str, Any],
     labels: Optional[List[str]],
 ) -> List[Dict[str, Any]]:
-    import base64
     from typing import cast
     from openai.types.chat import (
         ChatCompletionMessageParam,
@@ -127,18 +117,7 @@ def run_vlm_detection(
     prompt = _VLM_DET_PROMPT_TEMPLATE.format(targets=targets)
 
     parts: List[dict] = [{"type": "text", "text": prompt}]
-    if item.get("url"):
-        parts.append({"type": "image_url", "image_url": {"url": item["url"]}})
-    elif item.get("path"):
-        b64 = base64.b64encode(_load_image_bytes(item["path"]))
-        parts.append(
-            {
-                "type": "image_url",
-                "image_url": {"url": f"data:image/jpeg;base64,{b64.decode('utf-8')}"},
-            }
-        )
-    else:
-        raise ValueError("item must have path or url")
+    parts.append(image_part_from_item(item))
 
     user_msg: ChatCompletionUserMessageParam = {
         "role": "user",

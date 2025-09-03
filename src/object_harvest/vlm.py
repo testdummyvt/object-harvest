@@ -1,10 +1,6 @@
 from __future__ import annotations
-
-import base64
 import time
 from typing import Any, Dict, List, cast
-
-from PIL import Image
 from openai.types.chat import (
     ChatCompletionMessageParam,
     ChatCompletionUserMessageParam,
@@ -13,6 +9,7 @@ from dotenv import load_dotenv
 
 from object_harvest.logging import get_logger
 from object_harvest.utils.clients import AIClient
+from object_harvest.utils.images import image_part_from_item
 
 logger = get_logger(__name__)
 load_dotenv()
@@ -32,18 +29,6 @@ Rules:
 - Values are concise visual descriptions specific to the image.
 - Output only NDJSON lines, nothing else.
 """.strip()
-
-
-def _load_image_bytes(path: str) -> bytes:
-    # Ensure consistent encoding; rely on PIL to open and re-encode as JPEG
-    with Image.open(path) as im:
-        im = im.convert("RGB")
-        from io import BytesIO
-
-        buf = BytesIO()
-        # Save as JPEG with good quality; disable subsampling for better text details
-        im.save(buf, format="JPEG", quality=95, optimize=True, subsampling=0)
-        return buf.getvalue()
 
 
 def describe_and_list(client: AIClient, item: Dict[str, Any]) -> Dict[str, Any]:
@@ -74,23 +59,7 @@ def describe_and_list(client: AIClient, item: Dict[str, Any]) -> Dict[str, Any]:
 def describe_objects_ndjson(client: AIClient, item: Dict[str, Any]) -> str:
     """Generate NDJSON lines mapping object name -> per-object description, including people when present."""
     parts: list[dict] = [{"type": "text", "text": PROMPT}]
-    if item.get("url"):
-        parts.append(
-            {
-                "type": "image_url",
-                "image_url": {"url": item["url"]},
-            }
-        )
-    elif item.get("path"):
-        b64 = base64.b64encode(_load_image_bytes(item["path"])).decode("utf-8")
-        parts.append(
-            {
-                "type": "image_url",
-                "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
-            }
-        )
-    else:
-        raise ValueError("item must have either 'url' or 'path'")
+    parts.append(image_part_from_item(item))
 
     # content must be a list of content parts for user messages in 1.x SDK
     user_msg: ChatCompletionUserMessageParam = {
