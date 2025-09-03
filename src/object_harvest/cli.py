@@ -423,6 +423,12 @@ def _add_synthesis_parser(sub: argparse._SubParsersAction) -> None:
         default=0,
         help="For .jsonl outputs, flush results to disk in batches of this size (0 disables incremental batch writes)",
     )
+    p.add_argument(
+        "--max-tokens",
+        type=int,
+        default=250,
+        help="Max tokens for the LLM completion when synthesizing",
+    )
     p.set_defaults(command="synthesis")
 
 
@@ -432,8 +438,11 @@ def _synthesize_text(
     objects: list[str],
     n: int,
     client: AIClient | None = None,
+    max_tokens: int = 250,
 ) -> dict:
-    return synthesize_one_line(objects, n, model, base_url, client=client)
+    return synthesize_one_line(
+        objects, n, model, base_url, client=client, max_tokens=max_tokens
+    )
 
 
 def _run_synthesis(args: argparse.Namespace) -> int:
@@ -455,7 +464,12 @@ def _run_synthesis(args: argparse.Namespace) -> int:
         if limiter:
             limiter.acquire()
         return _synthesize_text(
-            args.model, args.api_base, objs, num_objects, client=shared_llm_client
+            args.model,
+            args.api_base,
+            objs,
+            num_objects,
+            client=shared_llm_client,
+            max_tokens=int(getattr(args, "max_tokens", 250)),
         )
 
     results: list[dict] = []

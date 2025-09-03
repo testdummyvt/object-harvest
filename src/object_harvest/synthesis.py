@@ -30,6 +30,7 @@ def synthesize_one_line(
     model: str,
     base_url: str | None,
     client: "AIClient | None" = None,
+    max_tokens: int = 250,
 ) -> Dict:
     """Generate a one-line description and per-object descriptions for up to N provided objects.
 
@@ -51,7 +52,7 @@ def synthesize_one_line(
         model=llm.model,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.4,
-        max_tokens=300,
+        max_tokens=max_tokens,
     )
     raw = (resp.choices[0].message.content or "").strip()
     # Strip possible code fences and attempt JSON parse
