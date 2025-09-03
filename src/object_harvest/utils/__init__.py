@@ -58,7 +58,9 @@ def append_and_maybe_flush_jsonl(
             batch.clear()
 
 
-def flush_remaining_jsonl(fh, lock: threading.Lock, batch: list[dict[str, Any]]) -> None:
+def flush_remaining_jsonl(
+    fh, lock: threading.Lock, batch: list[dict[str, Any]]
+) -> None:
     """Flush any remaining records in the in-memory batch to fh.
 
     Thread-safe: acquires the provided lock during flush.

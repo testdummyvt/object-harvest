@@ -11,6 +11,8 @@ Extract object suggestions from images using Vision-Language Models (VLMs), perf
 - OpenAI-compatible API client (set `--api-base` for OpenRouter/others)
 - Default model: `qwen/qwen2.5-vl-72b-instruct` (override via `--model` or `OBJH_MODEL`)
 - Concurrency via threads + a shared RPM rate limiter (`--rpm`)
+- Progress bar with live Generations Per Minute (GPM) for synthesis
+- Batched JSONL saving for synthesis via `--save-batch-size` to improve durability with many workers
 - Subcommands:
   - `describe` — suggest objects as NDJSON lines (includes people when present)
   - `detect` — open-vocabulary detection via GroundingDINO or VLM-backed detection
@@ -147,7 +149,8 @@ object-harvest synthesis \
   --rpm 60 \
   --max-workers 8 \
   --model qwen/qwen2.5-vl-72b-instruct \
-  --out ./synthesis.jsonl
+  --out ./synthesis.jsonl \
+  --save-batch-size 25
 ```
 
 Flags (synthesis):
@@ -156,6 +159,7 @@ Flags (synthesis):
 - `--count` number of samples to generate; with `--out` ending in .jsonl, writes one JSON object per line; otherwise writes a JSON array/file
 - `--rpm`, `--max-workers` for throughput control
 - `--out` optional; if omitted, prints to stdout
+ - `--save-batch-size <N>` (only for .jsonl) append results in batches of N for durability during long runs
 
 
 ## Output
@@ -191,18 +195,28 @@ Synthesis (.json or .jsonl records):
 }
 ```
 
+When writing `.jsonl` with `--save-batch-size`, results are appended in batches for resilience. A live progress bar shows GPM.
+
 ## Notes
 
 - Describe is production-ready; detection is W.I.P and does not work as of now (implementations pending). Synthesis uses the LLM API.
-- A single OpenAI client is shared across threads. Use `--rpm` to avoid provider rate limits.
+- A single OpenAI-compatible client is shared across threads. Use `--rpm` to avoid provider rate limits.
 - Supported image types: `.jpg`, `.jpeg`, `.png`, `.webp`, `.bmp`, `.tiff`.
+
+### Best practices
+- Reuse one client per process to avoid exhausting file descriptors/sockets (fixes errors like `[Errno 24] Too many open files`). The CLI already does this for synthesis.
+- With high `--max-workers`, set a non-zero `--rpm` to reduce 429s.
 
 ## Development
 
 - Code lives in `src/object_harvest/`.
   - `cli.py`: argument parsing and orchestration
   - `reader.py`: iterates inputs (folder or list file)
-  - `vlm.py`: OpenAI-compatible client and prompt logic (NDJSON for describe)
+  - `vlm.py`: prompt logic for NDJSON describe using the unified client
+  - `detection.py`: detection backends (GroundingDINO, VLM-backed JSON grounding) and parsers
+  - `synthesis.py`: one-line description + per-object phrasing generation
+  - `utils/clients.py`: unified OpenAI-compatible client (`AIClient`)
+  - `utils/__init__.py`: `RateLimiter`, JSONL batch helpers, tqdm GPM helper
   - `writer.py`: writes per-image JSON files; also supports raw NDJSON via `write_text`
   - `logging.py`: emoji-prefixed logger (use `get_logger(__name__)`)
 

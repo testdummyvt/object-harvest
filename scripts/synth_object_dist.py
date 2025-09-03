@@ -5,6 +5,7 @@ from collections import Counter
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 
+
 def load_objects_from_jsonl(jsonl_path):
     """
     Loads all objects (use the keys of each object dict) from a synthesis output JSONL file.
@@ -12,7 +13,7 @@ def load_objects_from_jsonl(jsonl_path):
     We collect the dict keys (object names), not the values.
     """
     all_objects = []
-    with open(jsonl_path, 'r', encoding='utf-8') as f:
+    with open(jsonl_path, "r", encoding="utf-8") as f:
         for line in tqdm(f, desc="Reading JSONL"):
             if not line.strip():
                 continue
@@ -30,6 +31,7 @@ def load_objects_from_jsonl(jsonl_path):
                 print(f"Warning: failed to parse line: {e}")
     return all_objects
 
+
 def plot_distribution(counter, top_n=30, out_file=None):
     labels, counts = zip(*counter.most_common(top_n)) if counter else ([], [])
     plt.figure(figsize=(12, 6))
@@ -44,11 +46,26 @@ def plot_distribution(counter, top_n=30, out_file=None):
     else:
         plt.show()
 
+
 def main():
-    parser = argparse.ArgumentParser(description="Plot distribution of generated object descriptions from synthesis JSONL output.")
-    parser.add_argument("--input", "-i", required=True, help="Synthesis output JSONL file.")
-    parser.add_argument("--top", "-n", type=int, default=30, help="Show top N descriptions (default: 30).")
-    parser.add_argument("--out", "-o", help="Output file for plot (e.g., dist.png). If not set, shows interactively.")
+    parser = argparse.ArgumentParser(
+        description="Plot distribution of generated object descriptions from synthesis JSONL output."
+    )
+    parser.add_argument(
+        "--input", "-i", required=True, help="Synthesis output JSONL file."
+    )
+    parser.add_argument(
+        "--top",
+        "-n",
+        type=int,
+        default=30,
+        help="Show top N descriptions (default: 30).",
+    )
+    parser.add_argument(
+        "--out",
+        "-o",
+        help="Output file for plot (e.g., dist.png). If not set, shows interactively.",
+    )
     args = parser.parse_args()
 
     print(f"Loading synthesis outputs from: {args.input}")
@@ -59,6 +76,7 @@ def main():
     print(f"Found {len(counter)} unique descriptions.")
 
     plot_distribution(counter, top_n=args.top, out_file=args.out)
+
 
 if __name__ == "__main__":
     main()

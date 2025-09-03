@@ -10,8 +10,9 @@ from typing import Iterable, Optional
 
 from object_harvest.logging import get_logger
 from object_harvest.reader import iter_images
-from object_harvest.vlm import VLMClient, describe_objects_ndjson
-from object_harvest.synthesis import synthesize_one_line, LLMClient
+from object_harvest.vlm import describe_objects_ndjson
+from object_harvest.synthesis import synthesize_one_line
+from object_harvest.utils.clients import AIClient
 from object_harvest.detection import run_gdino_detection, run_vlm_detection
 from object_harvest.writer import JSONDirWriter
 from object_harvest.utils import (
@@ -20,41 +21,57 @@ from object_harvest.utils import (
     flush_remaining_jsonl,
     update_tqdm_gpm,
 )
+from object_harvest.utils.paths import safe_stem
+from object_harvest.utils.runs import resolve_run_dir_base
 from tqdm import tqdm
 
 logger = get_logger(__name__)
-
-
-def _safe_stem(image_ref: str) -> str:
-    from urllib.parse import urlparse
-
-    parsed = urlparse(image_ref)
-    if parsed.scheme in ("http", "https"):
-        stem = os.path.basename(parsed.path) or parsed.netloc
-    else:
-        stem = os.path.splitext(os.path.basename(image_ref))[0] or "image"
-    return stem.replace("/", "_").replace("\\", "_") or "image"
 
 
 # ----------------------- Describe subcommand -----------------------
 def _add_describe_parser(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser(
         "describe",
-    help="Suggest objects per image as NDJSON lines (object -> short description)",
-    description="Generate NDJSON per image: each line is {\"object\": \"object description\"}. Includes people when present.",
+        help="Suggest objects per image as NDJSON lines (object -> short description)",
+        description='Generate NDJSON per image: each line is {"object": "object description"}. Includes people when present.',
     )
-    p.add_argument("--input", required=True, help="Input folder or a text file with paths/URLs")
-    p.add_argument("--out", required=True, help="Output folder for per-image NDJSON files")
-    p.add_argument("--model", default=os.getenv("OBJH_MODEL", "qwen/qwen2.5-vl-72b-instruct"))
-    p.add_argument("--api-base", default=os.getenv("OBJH_API_BASE"), help="OpenAI-compatible base URL")
-    p.add_argument("--max-workers", type=int, default=min(32, (os.cpu_count() or 4) * 5))
-    p.add_argument("--rpm", type=int, default=int(os.getenv("OBJH_RPM", "0")), help="Requests per minute throttle (0=unlimited)")
-    p.add_argument("--batch", type=int, default=0, help="Optional batch size; 0 processes all")
-    p.add_argument("--resume", action="store_true", help="Resume into an existing run dir and skip images with existing JSON outputs")
+    p.add_argument(
+        "--input", required=True, help="Input folder or a text file with paths/URLs"
+    )
+    p.add_argument(
+        "--out", required=True, help="Output folder for per-image NDJSON files"
+    )
+    p.add_argument(
+        "--model", default=os.getenv("OBJH_MODEL", "qwen/qwen2.5-vl-72b-instruct")
+    )
+    p.add_argument(
+        "--api-base",
+        default=os.getenv("OBJH_API_BASE"),
+        help="OpenAI-compatible base URL",
+    )
+    p.add_argument(
+        "--max-workers", type=int, default=min(32, (os.cpu_count() or 4) * 5)
+    )
+    p.add_argument(
+        "--rpm",
+        type=int,
+        default=int(os.getenv("OBJH_RPM", "0")),
+        help="Requests per minute throttle (0=unlimited)",
+    )
+    p.add_argument(
+        "--batch", type=int, default=0, help="Optional batch size; 0 processes all"
+    )
+    p.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume into an existing run dir and skip images with existing JSON outputs",
+    )
     p.set_defaults(command="describe")
 
 
-def _process_one_describe(client: VLMClient, item: dict, limiter: RateLimiter | None) -> dict:
+def _process_one_describe(
+    client: AIClient, item: dict, limiter: RateLimiter | None
+) -> dict:
     path = item.get("path") or item.get("url")
     try:
         if limiter:
@@ -67,28 +84,14 @@ def _process_one_describe(client: VLMClient, item: dict, limiter: RateLimiter | 
 
 
 def _run_describe(args: argparse.Namespace) -> int:
-    client = VLMClient(model=args.model, base_url=args.api_base)
+    client = AIClient(model=args.model, base_url=args.api_base)
     items = list(iter_images(args.input, limit=args.batch if args.batch > 0 else None))
     logger.info(f"found {len(items)} images")
 
-    # Determine which run directory to use for output, supporting resume:
-    # If resume is enabled and the output directory is a directory (not already a "run-" directory),
-    # search for subdirectories starting with "run-" and, if any exist, resume into the most recently
-    # modified one. Otherwise, use the specified output directory as the base.
-    writer_base = args.out
-    if args.resume:
-        try:
-            if os.path.isdir(args.out) and not os.path.basename(args.out).startswith("run-"):
-                run_dirs = [
-                    os.path.join(args.out, d)
-                    for d in os.listdir(args.out)
-                    if d.startswith("run-") and os.path.isdir(os.path.join(args.out, d))
-                ]
-                if run_dirs:
-                    writer_base = max(run_dirs, key=os.path.getmtime)
-                    logger.info(f"resuming into {writer_base}")
-        except Exception:
-            pass
+    # Resolve output base dir with resume support
+    writer_base = resolve_run_dir_base(args.out, args.resume)
+    if writer_base != args.out and args.resume:
+        logger.info(f"resuming into {writer_base}")
 
     writer = JSONDirWriter(writer_base)
     existing_stems: set[str] = set()
@@ -105,7 +108,7 @@ def _run_describe(args: argparse.Namespace) -> int:
         futures = []
         for item in items:
             image_ref = item.get("path") or item.get("url") or "image"
-            safe = _safe_stem(image_ref)
+            safe = safe_stem(image_ref)
             if args.resume and safe in existing_stems:
                 continue
             futures.append(ex.submit(_process_one_describe, client, item, limiter))
@@ -113,13 +116,19 @@ def _run_describe(args: argparse.Namespace) -> int:
         for fut in tqdm(as_completed(futures), total=len(futures)):
             rec = fut.result()
             image_ref = rec.get("image") or "image"
-            safe = _safe_stem(image_ref)
+            safe = safe_stem(image_ref)
             # Write NDJSON file per image
             nd = rec.get("ndjson", "") if isinstance(rec, dict) else ""
             writer.write_text(f"{safe}", nd, ext=".ndjson")
 
     total_written = (
-        len([n for n in os.listdir(writer.run_dir) if n.lower().endswith((".ndjson", ".json"))])
+        len(
+            [
+                n
+                for n in os.listdir(writer.run_dir)
+                if n.lower().endswith((".ndjson", ".json"))
+            ]
+        )
         if os.path.isdir(writer.run_dir)
         else 0
     )
@@ -136,23 +145,55 @@ def _add_detect_parser(sub: argparse._SubParsersAction) -> None:
             "Perform description- or object-based detections. Can optionally read objects per-image from a previous describe run."
         ),
     )
-    p.add_argument("--input", required=True, help="Input folder or a text file with paths/URLs")
-    p.add_argument("--out", required=True, help="Output folder for per-image detection JSON files")
-    p.add_argument("--backend", choices=["gdino", "vlm"], default="gdino", help="Detection backend")
-    p.add_argument("--hf-model", default=None, help="Hugging Face model id for the chosen backend")
-    p.add_argument("--model", default=os.getenv("OBJH_MODEL", "qwen/qwen2.5-vl-72b-instruct"), help="VLM model name for --backend vlm")
-    p.add_argument("--api-base", default=os.getenv("OBJH_API_BASE"), help="OpenAI-compatible base URL for --backend vlm")
-    p.add_argument("--from-describe", default=None, help="Path to a describe run-* directory to read objects per image")
+    p.add_argument(
+        "--input", required=True, help="Input folder or a text file with paths/URLs"
+    )
+    p.add_argument(
+        "--out", required=True, help="Output folder for per-image detection JSON files"
+    )
+    p.add_argument(
+        "--backend", choices=["gdino", "vlm"], default="gdino", help="Detection backend"
+    )
+    p.add_argument(
+        "--hf-model", default=None, help="Hugging Face model id for the chosen backend"
+    )
+    p.add_argument(
+        "--model",
+        default=os.getenv("OBJH_MODEL", "qwen/qwen2.5-vl-72b-instruct"),
+        help="VLM model name for --backend vlm",
+    )
+    p.add_argument(
+        "--api-base",
+        default=os.getenv("OBJH_API_BASE"),
+        help="OpenAI-compatible base URL for --backend vlm",
+    )
+    p.add_argument(
+        "--from-describe",
+        default=None,
+        help="Path to a describe run-* directory to read objects per image",
+    )
     p.add_argument(
         "--objects",
         default=None,
         help="Either a path to a text file (one object per line) or a comma-separated list of object names",
     )
-    p.add_argument("--text", default=None, help="Free-form object description prompt for GroundingDINO (optional)")
-    p.add_argument("--threshold", type=float, default=0.25, help="Score threshold for detections")
-    p.add_argument("--max-workers", type=int, default=min(32, (os.cpu_count() or 4) * 5))
+    p.add_argument(
+        "--text",
+        default=None,
+        help="Free-form object description prompt for GroundingDINO (optional)",
+    )
+    p.add_argument(
+        "--threshold", type=float, default=0.25, help="Score threshold for detections"
+    )
+    p.add_argument(
+        "--max-workers", type=int, default=min(32, (os.cpu_count() or 4) * 5)
+    )
     p.add_argument("--batch", type=int, default=0)
-    p.add_argument("--resume", action="store_true", help="Resume into an existing run dir and skip images with existing JSON outputs")
+    p.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume into an existing run dir and skip images with existing JSON outputs",
+    )
     p.set_defaults(command="detect")
 
 
@@ -247,20 +288,9 @@ def _run_detection_on_item(
 
 def _run_detect(args: argparse.Namespace) -> int:
     # Resolve run dir for outputs with resume support
-    writer_base = args.out
-    if args.resume:
-        try:
-            if os.path.isdir(args.out) and not os.path.basename(args.out).startswith("run-"):
-                run_dirs = [
-                    os.path.join(args.out, d)
-                    for d in os.listdir(args.out)
-                    if d.startswith("run-") and os.path.isdir(os.path.join(args.out, d))
-                ]
-                if run_dirs:
-                    writer_base = max(run_dirs, key=os.path.getmtime)
-                    logger.info(f"resuming into {writer_base}")
-        except Exception:
-            pass
+    writer_base = resolve_run_dir_base(args.out, args.resume)
+    if writer_base != args.out and args.resume:
+        logger.info(f"resuming into {writer_base}")
     writer = JSONDirWriter(writer_base)
 
     existing_stems: set[str] = set()
@@ -281,18 +311,7 @@ def _run_detect(args: argparse.Namespace) -> int:
     per_image_labels: dict[str, list[str]] = {}
     if args.from_describe:
         # if path points to parent folder, auto-pick latest run
-        src = args.from_describe
-        if os.path.isdir(src) and not os.path.basename(src).startswith("run-"):
-            try:
-                run_dirs = [
-                    os.path.join(src, d)
-                    for d in os.listdir(src)
-                    if d.startswith("run-") and os.path.isdir(os.path.join(src, d))
-                ]
-                if run_dirs:
-                    src = max(run_dirs, key=os.path.getmtime)
-            except Exception:
-                pass
+        src = resolve_run_dir_base(args.from_describe, True)
         per_image_labels = _load_describe_objects_map(src)
 
     items = list(iter_images(args.input, limit=args.batch if args.batch > 0 else None))
@@ -300,17 +319,21 @@ def _run_detect(args: argparse.Namespace) -> int:
 
     def labels_for_item(item: dict) -> list[str] | None:
         image_ref = item.get("path") or item.get("url") or "image"
-        stem = _safe_stem(image_ref)
+        stem = safe_stem(image_ref)
         return per_image_labels.get(stem) or global_labels
 
     with ThreadPoolExecutor(max_workers=args.max_workers) as ex:
         futures = []
         future_to_image: dict = {}
-        client_vlm = VLMClient(model=args.model, base_url=args.api_base) if args.backend == "vlm" else None
+        client_vlm = (
+            AIClient(model=args.model, base_url=args.api_base)
+            if args.backend == "vlm"
+            else None
+        )
 
         for item in items:
             image_ref = item.get("path") or item.get("url") or "image"
-            stem = _safe_stem(image_ref)
+            stem = safe_stem(image_ref)
             if args.resume and stem in existing_stems:
                 continue
 
@@ -336,13 +359,17 @@ def _run_detect(args: argparse.Namespace) -> int:
             futures.append(fut)
             future_to_image[fut] = image_ref
 
-        for fut in tqdm(as_completed(futures), total=len(futures)):
-            rec = fut.result()
-            image_ref = future_to_image.get(fut, "image")
-            # Standardize output shape
-            out = rec if (isinstance(rec, dict) and "image" in rec and "detections" in rec) else {"image": image_ref, "detections": rec or []}
-            safe = _safe_stem(out.get("image") or "image")
-            writer.write(f"{safe}", out)
+    for fut in tqdm(as_completed(futures), total=len(futures)):
+        rec = fut.result()
+        image_ref = future_to_image.get(fut, "image")
+        # Standardize output shape
+        out = (
+            rec
+            if (isinstance(rec, dict) and "image" in rec and "detections" in rec)
+            else {"image": image_ref, "detections": rec or []}
+        )
+        safe = safe_stem(out.get("image") or "image")
+        writer.write(f"{safe}", out)
 
     logger.info(f"done. detection outputs under {writer.run_dir}")
     return 0
@@ -361,24 +388,61 @@ def _add_synthesis_parser(sub: argparse._SubParsersAction) -> None:
         help="Either a path to a text file (one object per line) or a comma-separated list of objects",
     )
     # Renamed for readability; keep --n as alias for backward-compat
-    p.add_argument("--num-objects", "--n", dest="num_objects", type=int, default=6, help="Number of objects to include in each description")
-    p.add_argument("--model", default=os.getenv("OBJH_MODEL", "qwen/qwen2.5-vl-72b-instruct"))
+    p.add_argument(
+        "--num-objects",
+        "--n",
+        dest="num_objects",
+        type=int,
+        default=6,
+        help="Number of objects to include in each description",
+    )
+    p.add_argument(
+        "--model", default=os.getenv("OBJH_MODEL", "qwen/qwen2.5-vl-72b-instruct")
+    )
     p.add_argument("--api-base", default=os.getenv("OBJH_API_BASE"))
-    p.add_argument("--count", type=int, default=1, help="Number of synthetic samples to generate")
-    p.add_argument("--rpm", type=int, default=int(os.getenv("OBJH_RPM", "0")), help="Requests per minute throttle (0=unlimited)")
-    p.add_argument("--max-workers", type=int, default=min(32, (os.cpu_count() or 4) * 5))
-    p.add_argument("--out", default=None, help="Optional path to write JSON/JSONL output; if omitted, prints to stdout")
+    p.add_argument(
+        "--count", type=int, default=1, help="Number of synthetic samples to generate"
+    )
+    p.add_argument(
+        "--rpm",
+        type=int,
+        default=int(os.getenv("OBJH_RPM", "0")),
+        help="Requests per minute throttle (0=unlimited)",
+    )
+    p.add_argument(
+        "--max-workers", type=int, default=min(32, (os.cpu_count() or 4) * 5)
+    )
+    p.add_argument(
+        "--out",
+        default=None,
+        help="Optional path to write JSON/JSONL output; if omitted, prints to stdout",
+    )
     p.add_argument(
         "--save-batch-size",
         type=int,
         default=0,
         help="For .jsonl outputs, flush results to disk in batches of this size (0 disables incremental batch writes)",
     )
+    p.add_argument(
+        "--max-tokens",
+        type=int,
+        default=250,
+        help="Max tokens for the LLM completion when synthesizing",
+    )
     p.set_defaults(command="synthesis")
 
 
-def _synthesize_text(model: str, base_url: str | None, objects: list[str], n: int, client: LLMClient | None = None) -> dict:
-    return synthesize_one_line(objects, n, model, base_url, client=client)
+def _synthesize_text(
+    model: str,
+    base_url: str | None,
+    objects: list[str],
+    n: int,
+    client: AIClient | None = None,
+    max_tokens: int = 250,
+) -> dict:
+    return synthesize_one_line(
+        objects, n, model, base_url, client=client, max_tokens=max_tokens
+    )
 
 
 def _run_synthesis(args: argparse.Namespace) -> int:
@@ -394,19 +458,28 @@ def _run_synthesis(args: argparse.Namespace) -> int:
     save_batch_size = int(getattr(args, "save_batch_size", 0))
 
     # Create one shared LLM client to avoid opening too many connections/file descriptors
-    shared_llm_client = LLMClient(model=args.model, base_url=args.api_base)
+    shared_llm_client = AIClient(model=args.model, base_url=args.api_base)
 
     def one_sample() -> dict:
         if limiter:
             limiter.acquire()
-        return _synthesize_text(args.model, args.api_base, objs, num_objects, client=shared_llm_client)
+        return _synthesize_text(
+            args.model,
+            args.api_base,
+            objs,
+            num_objects,
+            client=shared_llm_client,
+            max_tokens=int(getattr(args, "max_tokens", 250)),
+        )
 
     results: list[dict] = []
     start = time.time()
     successes = 0
     failures = 0
     # Batch streaming only for .jsonl outputs when save_batch_size > 0
-    streaming_jsonl = bool(args.out and args.out.lower().endswith(".jsonl") and save_batch_size > 0)
+    streaming_jsonl = bool(
+        args.out and args.out.lower().endswith(".jsonl") and save_batch_size > 0
+    )
     fh = None
     write_lock = threading.Lock()
     current_batch: list[dict] = []
@@ -414,12 +487,16 @@ def _run_synthesis(args: argparse.Namespace) -> int:
     if streaming_jsonl:
         out_dir = os.path.dirname(args.out) or "."
         os.makedirs(out_dir, exist_ok=True)
-        fh = open(args.out, "a", encoding="utf-8")  # append mode for incremental batches
+        fh = open(
+            args.out, "a", encoding="utf-8"
+        )  # append mode for incremental batches
 
     # Local adapters around utils helpers to keep call sites simple
     def _append_or_collect(rec: dict) -> None:
         if streaming_jsonl and fh is not None:
-            append_and_maybe_flush_jsonl(rec, fh, write_lock, current_batch, save_batch_size)
+            append_and_maybe_flush_jsonl(
+                rec, fh, write_lock, current_batch, save_batch_size
+            )
         else:
             results.append(rec)
 
@@ -429,6 +506,7 @@ def _run_synthesis(args: argparse.Namespace) -> int:
 
     def _update_progress(pbar: tqdm) -> None:
         update_tqdm_gpm(pbar, start, successes)
+
     try:
         if count == 1:
             with tqdm(total=1, desc="synthesis", unit="gen") as pbar:
@@ -464,7 +542,9 @@ def _run_synthesis(args: argparse.Namespace) -> int:
     if failures:
         elapsed_min = max((time.time() - start) / 60.0, 1e-6)
         gpm = successes / elapsed_min
-        logger.info(f"generated {successes}/{count} (failures={failures}), gpm={gpm:.1f}")
+        logger.info(
+            f"generated {successes}/{count} (failures={failures}), gpm={gpm:.1f}"
+        )
 
     # Write output
     if args.out:

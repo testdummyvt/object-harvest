@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import json
 import os
-from io import BytesIO
 from typing import Any, Dict, List, Optional
 
 from PIL import Image
 from dotenv import load_dotenv
 
 from object_harvest.logging import get_logger
-from object_harvest.vlm import VLMClient, _load_image_bytes  # reuse JPEG re-encode
+from object_harvest.utils.clients import AIClient
+from object_harvest.utils.images import load_image_from_item, image_part_from_item
 
 logger = get_logger(__name__)
 load_dotenv()
@@ -31,16 +31,8 @@ def _as_float(v: Any, default: float = 0.0) -> float:
 
 
 def _load_image(item: Dict[str, Any]) -> Image.Image:
-    if item.get("path"):
-        return Image.open(item["path"]).convert("RGB")
-    if item.get("url"):
-        # Fetch via stdlib to avoid adding dependencies
-        import urllib.request
-
-        with urllib.request.urlopen(item["url"]) as resp:
-            data = resp.read()
-        return Image.open(BytesIO(data)).convert("RGB")
-    raise ValueError("item must include 'path' or 'url'")
+    # Backward-compat shim; delegate to utils helper
+    return load_image_from_item(item)
 
 
 def run_gdino_detection(
@@ -61,10 +53,14 @@ def run_gdino_detection(
         return []
 
     if not labels and not (text and text.strip()):
-        logger.warning("gdino backend requires either non-empty labels or a text description")
+        logger.warning(
+            "gdino backend requires either non-empty labels or a text description"
+        )
         return []
 
-    model_id = hf_model or os.environ.get("OBJH_GDINO_MODEL", "IDEA-Research/grounding-dino-base")
+    model_id = hf_model or os.environ.get(
+        "OBJH_GDINO_MODEL", "IDEA-Research/grounding-dino-base"
+    )
     pipe = pipeline("zero-shot-object-detection", model=model_id)
 
     image = _load_image(item)
@@ -74,7 +70,9 @@ def run_gdino_detection(
             outputs = pipe(image, text=text, threshold=threshold)
         except TypeError:
             # Fallback: some implementations expect 'candidate_labels' only; try splitting text to labels
-            fallback_labels = [s.strip() for s in text.split(",") if s.strip()] or labels or []
+            fallback_labels = (
+                [s.strip() for s in text.split(",") if s.strip()] or labels or []
+            )
             outputs = pipe(image, candidate_labels=fallback_labels, threshold=threshold)
     else:
         outputs = pipe(image, candidate_labels=labels, threshold=threshold)
@@ -105,25 +103,21 @@ _VLM_DET_PROMPT_TEMPLATE = (
 
 
 def run_vlm_detection(
-    client: VLMClient,
+    client: AIClient,
     item: Dict[str, Any],
     labels: Optional[List[str]],
 ) -> List[Dict[str, Any]]:
-    import base64
     from typing import cast
-    from openai.types.chat import ChatCompletionMessageParam, ChatCompletionUserMessageParam
+    from openai.types.chat import (
+        ChatCompletionMessageParam,
+        ChatCompletionUserMessageParam,
+    )
 
     targets = ", ".join(labels) if labels else "(none)"
     prompt = _VLM_DET_PROMPT_TEMPLATE.format(targets=targets)
 
     parts: List[dict] = [{"type": "text", "text": prompt}]
-    if item.get("url"):
-        parts.append({"type": "image_url", "image_url": {"url": item["url"]}})
-    elif item.get("path"):
-        b64 = base64.b64encode(_load_image_bytes(item["path"]))
-        parts.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64.decode('utf-8')}"}})
-    else:
-        raise ValueError("item must have path or url")
+    parts.append(image_part_from_item(item))
 
     user_msg: ChatCompletionUserMessageParam = {
         "role": "user",
@@ -207,10 +201,12 @@ def parse_vlm_detections_json(content: str) -> List[Dict[str, Any]]:
         score_val = d.get("score", 0.0)
         score = _clamp01(score_val)
 
-        normalized.append({
-            "label": label,
-            "score": score,
-            "bbox": {"xmin": xmin, "ymin": ymin, "xmax": xmax, "ymax": ymax},
-        })
+        normalized.append(
+            {
+                "label": label,
+                "score": score,
+                "bbox": {"xmin": xmin, "ymin": ymin, "xmax": xmax, "ymax": ymax},
+            }
+        )
 
     return normalized
