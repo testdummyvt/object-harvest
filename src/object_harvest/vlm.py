@@ -1,13 +1,10 @@
 from __future__ import annotations
 
 import base64
-import os
 import time
-from dataclasses import dataclass
 from typing import Any, Dict, List, cast
 
 from PIL import Image
-from openai import OpenAI
 from openai.types.chat import (
     ChatCompletionMessageParam,
     ChatCompletionUserMessageParam,
@@ -15,6 +12,7 @@ from openai.types.chat import (
 from dotenv import load_dotenv
 
 from object_harvest.logging import get_logger
+from object_harvest.utils.clients import AIClient
 
 logger = get_logger(__name__)
 load_dotenv()
@@ -48,24 +46,7 @@ def _load_image_bytes(path: str) -> bytes:
         return buf.getvalue()
 
 
-@dataclass
-class VLMClient:
-    model: str
-    base_url: str | None = None
-
-    def __post_init__(self) -> None:
-        self.client = OpenAI(
-            api_key=os.environ.get("OBJH_API_KEY"),
-            base_url=self.base_url or os.environ.get("OBJH_API_BASE"),
-        )
-        self.provider = (
-            "openai"
-            if not (self.base_url or os.environ.get("OBJH_API_BASE"))
-            else "custom"
-        )
-
-
-def describe_and_list(client: VLMClient, item: Dict[str, Any]) -> Dict[str, Any]:
+def describe_and_list(client: AIClient, item: Dict[str, Any]) -> Dict[str, Any]:
     """Deprecated: kept for backward-compat. Now delegates to describe_objects_ndjson and returns parsed lines.
 
     Returns {"ndjson": str, "objects": [str], "latency_ms": int}
@@ -74,7 +55,7 @@ def describe_and_list(client: VLMClient, item: Dict[str, Any]) -> Dict[str, Any]
     ndjson_text = describe_objects_ndjson(client, item)
     # Best-effort extract object names from NDJSON for compatibility
     objects: list[str] = []
-    for line in (ndjson_text.splitlines()):
+    for line in ndjson_text.splitlines():
         line = line.strip()
         if not line:
             continue
@@ -90,7 +71,7 @@ def describe_and_list(client: VLMClient, item: Dict[str, Any]) -> Dict[str, Any]
     return {"ndjson": ndjson_text, "objects": objects, "latency_ms": latency_ms}
 
 
-def describe_objects_ndjson(client: VLMClient, item: Dict[str, Any]) -> str:
+def describe_objects_ndjson(client: AIClient, item: Dict[str, Any]) -> str:
     """Generate NDJSON lines mapping object name -> per-object description, including people when present."""
     parts: list[dict] = [{"type": "text", "text": PROMPT}]
     if item.get("url"):

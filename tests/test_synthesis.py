@@ -46,7 +46,9 @@ class TestSynthesis(unittest.TestCase):
 
     def test_strict_json_parsing(self):
         _FakeOpenAI.payload = '{"describe": "A black cat lounging on a sofa.", "objects": [{"cat": "black cat lounging"}, {"sofa": "soft fabric sofa"}]}'
-        out = synth.synthesize_one_line(["cat", "sofa"], n=2, model="dummy", base_url=None)
+        out = synth.synthesize_one_line(
+            ["cat", "sofa"], n=2, model="dummy", base_url=None
+        )
         self.assertIn("describe", out)
         self.assertIn("objects", out)
         self.assertEqual(out["describe"], "A black cat lounging on a sofa.")
@@ -56,7 +58,9 @@ class TestSynthesis(unittest.TestCase):
 
     def test_fallback_when_not_json(self):
         _FakeOpenAI.payload = "A bright room with a chair and a table."
-        out = synth.synthesize_one_line(["chair", "table"], n=2, model="dummy", base_url=None)
+        out = synth.synthesize_one_line(
+            ["chair", "table"], n=2, model="dummy", base_url=None
+        )
         self.assertIn("describe", out)
         self.assertTrue(out["describe"].startswith("A bright room"))
         self.assertIn("objects", out)

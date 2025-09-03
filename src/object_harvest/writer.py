@@ -31,7 +31,9 @@ class JSONDirWriter:
         # If the provided base_dir already looks like a run directory (user passed an existing
         # run path like out/run-YYYYMMDD-HHMMSS-xxxx), then write into it directly.
         # Otherwise, create a fresh run directory under base_dir.
-        if os.path.isdir(self.base_dir) and os.path.basename(self.base_dir).startswith("run-"):
+        if os.path.isdir(self.base_dir) and os.path.basename(self.base_dir).startswith(
+            "run-"
+        ):
             self.run_dir = self.base_dir
             os.makedirs(self.run_dir, exist_ok=True)
         else:

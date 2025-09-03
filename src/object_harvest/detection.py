@@ -11,7 +11,8 @@ from PIL import Image
 from dotenv import load_dotenv
 
 from object_harvest.logging import get_logger
-from object_harvest.vlm import VLMClient, _load_image_bytes  # reuse JPEG re-encode
+from object_harvest.vlm import _load_image_bytes  # reuse JPEG re-encode
+from object_harvest.utils.clients import AIClient
 
 logger = get_logger(__name__)
 load_dotenv()
@@ -61,10 +62,14 @@ def run_gdino_detection(
         return []
 
     if not labels and not (text and text.strip()):
-        logger.warning("gdino backend requires either non-empty labels or a text description")
+        logger.warning(
+            "gdino backend requires either non-empty labels or a text description"
+        )
         return []
 
-    model_id = hf_model or os.environ.get("OBJH_GDINO_MODEL", "IDEA-Research/grounding-dino-base")
+    model_id = hf_model or os.environ.get(
+        "OBJH_GDINO_MODEL", "IDEA-Research/grounding-dino-base"
+    )
     pipe = pipeline("zero-shot-object-detection", model=model_id)
 
     image = _load_image(item)
@@ -74,7 +79,9 @@ def run_gdino_detection(
             outputs = pipe(image, text=text, threshold=threshold)
         except TypeError:
             # Fallback: some implementations expect 'candidate_labels' only; try splitting text to labels
-            fallback_labels = [s.strip() for s in text.split(",") if s.strip()] or labels or []
+            fallback_labels = (
+                [s.strip() for s in text.split(",") if s.strip()] or labels or []
+            )
             outputs = pipe(image, candidate_labels=fallback_labels, threshold=threshold)
     else:
         outputs = pipe(image, candidate_labels=labels, threshold=threshold)
@@ -105,13 +112,16 @@ _VLM_DET_PROMPT_TEMPLATE = (
 
 
 def run_vlm_detection(
-    client: VLMClient,
+    client: AIClient,
     item: Dict[str, Any],
     labels: Optional[List[str]],
 ) -> List[Dict[str, Any]]:
     import base64
     from typing import cast
-    from openai.types.chat import ChatCompletionMessageParam, ChatCompletionUserMessageParam
+    from openai.types.chat import (
+        ChatCompletionMessageParam,
+        ChatCompletionUserMessageParam,
+    )
 
     targets = ", ".join(labels) if labels else "(none)"
     prompt = _VLM_DET_PROMPT_TEMPLATE.format(targets=targets)
@@ -121,7 +131,12 @@ def run_vlm_detection(
         parts.append({"type": "image_url", "image_url": {"url": item["url"]}})
     elif item.get("path"):
         b64 = base64.b64encode(_load_image_bytes(item["path"]))
-        parts.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64.decode('utf-8')}"}})
+        parts.append(
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:image/jpeg;base64,{b64.decode('utf-8')}"},
+            }
+        )
     else:
         raise ValueError("item must have path or url")
 
@@ -207,10 +222,12 @@ def parse_vlm_detections_json(content: str) -> List[Dict[str, Any]]:
         score_val = d.get("score", 0.0)
         score = _clamp01(score_val)
 
-        normalized.append({
-            "label": label,
-            "score": score,
-            "bbox": {"xmin": xmin, "ymin": ymin, "xmax": xmax, "ymax": ymax},
-        })
+        normalized.append(
+            {
+                "label": label,
+                "score": score,
+                "bbox": {"xmin": xmin, "ymin": ymin, "xmax": xmax, "ymax": ymax},
+            }
+        )
 
     return normalized
