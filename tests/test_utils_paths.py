@@ -1,5 +1,6 @@
 from object_harvest.utils.paths import safe_stem
 
+
 def test_safe_stem_local_path():
     assert safe_stem("/tmp/foo/bar/baz.jpg") == "baz"
 
