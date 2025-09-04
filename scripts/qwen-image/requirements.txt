@@ -1,0 +1,14 @@
+--index-url https://download.pytorch.org/whl/cu128
+git+https://github.com/huggingface/diffusers.git
+torch
+torchvision
+Pillow
+transformers
+accelerate
+safetensors
+peft
+sentencepiece
+xformers
+numpy>=2
+tqdm
+ftfy
