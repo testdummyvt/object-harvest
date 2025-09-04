@@ -236,7 +236,7 @@ def main(argv: list[str] | None = None) -> int:
     if count == 0:
         logger.warning("No valid describe entries found in input. Nothing generated.")
     else:
-        logger.info(f"Done. Generated {count} image(s) into {out_dir}")
+        logger.info("Done. Generated %d image(s) into %s", count, out_dir)
     return 0
 
 
