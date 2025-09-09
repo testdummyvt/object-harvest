@@ -18,7 +18,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Iterator, Tuple
+from typing import Iterator, Tuple, Dict, Any
 
 from PIL import Image
 from tqdm import tqdm
@@ -31,8 +31,13 @@ from object_harvest.logging import get_logger
 logger = get_logger(__name__)
 
 
-def iter_descriptions(ndjson_path: Path) -> Iterator[Tuple[int, str]]:
-    """Yield (index, description) pairs from an NDJSON file.
+def iter_descriptions(ndjson_path: Path) -> Iterator[Tuple[int, str, Dict[str, str]]]:
+    """Yield (index, description, objects_dict) from an NDJSON file.
+
+    objects_dict is a single dictionary mapping object name -> description string
+    aggregated from any list of single-key dicts found under the "objects" field
+    (as produced by synthesis). If duplicate object names occur, the first
+    occurrence is kept and later duplicates are ignored.
 
     Skips lines that cannot be parsed or lack a "describe" field.
     Index starts at 1 for stable file naming.
@@ -49,8 +54,18 @@ def iter_descriptions(ndjson_path: Path) -> Iterator[Tuple[int, str]]:
             if not isinstance(obj, dict):
                 continue
             desc = obj.get("describe")
-            if isinstance(desc, str) and desc.strip():
-                yield i, desc.strip()
+            if not (isinstance(desc, str) and desc.strip()):
+                continue
+            objects_field = obj.get("objects", [])
+            objects_dict: Dict[str, str] = {}
+            if isinstance(objects_field, list):
+                for entry in objects_field:
+                    if isinstance(entry, dict) and entry:
+                        k, v = next(iter(entry.items()))
+                        k_str = str(k)
+                        if k_str not in objects_dict:  # keep first occurrence
+                            objects_dict[k_str] = str(v)
+            yield i, desc.strip(), objects_dict
 
 
 def count_descriptions(ndjson_path: Path) -> int:
@@ -76,16 +91,21 @@ def count_descriptions(ndjson_path: Path) -> int:
 
 def save_image(
     img: Image.Image, out_dir: Path, stem: str, index: int, fmt: str
-) -> Path:
-    """Save PIL image as stem-<index>.<fmt> in out_dir; returns the path."""
-    out_dir.mkdir(parents=True, exist_ok=True)
+) -> str:
+    """Save PIL image as stem-<index>.<fmt> inside out_dir/data; returns path."""
+    data_dir = out_dir / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
     filename = f"{stem}-{index:04d}.{fmt.lower()}"
-    out_path = out_dir / filename
+    out_path = data_dir / filename
     save_kwargs = {}
-    if fmt.lower() in {"jpg", "jpeg"}:
+    fmt_norm = fmt.lower()
+    if fmt_norm in {"jpg", "jpeg"}:
         save_kwargs = {"quality": 95}
-    img.save(out_path, format=fmt.upper(), **save_kwargs)
-    return out_path
+        pil_format = "JPEG"
+    else:
+        pil_format = fmt_norm.upper()
+    img.save(out_path, format=pil_format, **save_kwargs)
+    return filename
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -201,42 +221,65 @@ def main(argv: list[str] | None = None) -> int:
 
     count = 0
     total = count_descriptions(ndjson_path)
-    for idx, describe in tqdm(
-        iter_descriptions(ndjson_path), total=total, desc="Generating", unit="img"
-    ):
-        prompt_text = describe
-        if args.enhance:
-            try:
-                prompt_text = enhance_prompt(
-                    user_prompt=describe,
-                    system_prompt=args.enhance_system_prompt,
-                    model=args.enhance_model,
-                    base_url=args.enhance_base_url,
-                    temperature=args.enhance_temperature,
-                    max_tokens=args.enhance_max_tokens,
-                )
-            except Exception as e:
-                logger.warning("Enhancement failed for index %s: %s", idx, e)
-                prompt_text = describe
+    augmented_path = out_dir / "metadata.jsonl"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    logger.info("Augmented JSONL will be written to %s", augmented_path)
 
-        img = generator(
-            # Replace describe with enhanced text if enhancement is enabled.
-            prompt=prompt_text,
-            negative_prompt=" ",
-            aspect_ratio=args.aspect_ratio,
-            num_inference_steps=args.steps,
-            seed=args.seed,
-            randomize_seed=args.randomize_seed,
-            guidance_scale=args.guidance_scale,
-        )
-        path = save_image(img, out_dir, stem, idx, args.format)
-        count += 1
-        logger.info(f"Saved: {path}")
+    with augmented_path.open("w", encoding="utf-8") as outf:
+        for idx, describe, objects in tqdm(
+            iter_descriptions(ndjson_path), total=total, desc="Generating", unit="img"
+        ):
+            prompt_text = describe
+            if args.enhance:
+                try:
+                    prompt_text = enhance_prompt(
+                        user_prompt=describe,
+                        system_prompt=args.enhance_system_prompt,
+                        model=args.enhance_model,
+                        base_url=args.enhance_base_url,
+                        temperature=args.enhance_temperature,
+                        max_tokens=args.enhance_max_tokens,
+                    )
+                except Exception as e:
+                    logger.warning("Enhancement failed for index %s: %s", idx, e)
+                    prompt_text = describe
+
+            img = generator(
+                prompt=prompt_text,
+                negative_prompt=" ",
+                aspect_ratio=args.aspect_ratio,
+                num_inference_steps=args.steps,
+                seed=args.seed,
+                randomize_seed=args.randomize_seed,
+                guidance_scale=args.guidance_scale,
+            )
+            filename = save_image(img, out_dir, stem, idx, args.format)
+            count += 1
+            logger.info(f"Saved: {filename}")
+
+            record: Dict[str, Any] = {
+                "describe": describe,
+                # Nest objects dict inside another dict under 'objects' key per new schema
+                "objects": {"objects": objects},
+                "file_name": "data/" + filename,
+            }
+            if prompt_text != describe:
+                record["enhanced_describe"] = prompt_text
+            json.dump(record, outf, ensure_ascii=False)
+            outf.write("\n")
 
     if count == 0:
         logger.warning("No valid describe entries found in input. Nothing generated.")
+        # Clean up empty augmented file if present
+        try:
+            if augmented_path.exists() and augmented_path.stat().st_size == 0:
+                augmented_path.unlink()
+        except Exception:
+            pass
     else:
-        logger.info("Done. Generated %d image(s) into %s", count, out_dir)
+        logger.info(
+            "Done. Generated %d image(s). Augmented JSONL: %s", count, augmented_path
+        )
     return 0
 
 

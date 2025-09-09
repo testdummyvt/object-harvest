@@ -89,12 +89,11 @@ class QwenImage:
             weight_name="Qwen-Image-Lightning-8steps-V1.1.safetensors",
         )
         self.pipe.fuse_lora()
-        self.pipe.enable_xformers_memory_efficient_attention()
 
         # Compile transformer blocks for performance (requires PyTorch 2.x).
-        self.pipe.transformer = torch.compile(
-            self.pipe.transformer, mode="default", fullgraph=True, dynamic=True
-        )
+        # self.pipe.transformer = torch.compile(
+        #     self.pipe.transformer, mode="default", fullgraph=True, dynamic=True
+        # )
 
     def __call__(
         self,

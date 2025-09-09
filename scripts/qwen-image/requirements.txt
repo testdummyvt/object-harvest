@@ -1,5 +1,4 @@
---index-url https://download.pytorch.org/whl/cu128
-git+https://github.com/huggingface/diffusers.git
+--extra-index-url https://download.pytorch.org/whl/cu128
 torch
 torchvision
 Pillow
@@ -12,3 +11,6 @@ xformers
 numpy>=2
 tqdm
 ftfy
+git+https://github.com/huggingface/diffusers.git
+datasets
+huggingface_hub
