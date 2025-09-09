@@ -1,29 +1,24 @@
-"""Convert legacy metadata.jsonl 'objects' list-of-dicts format to nested dict schema.
+"""Convert legacy metadata.jsonl 'objects' field into arrays schema.
 
-Legacy format (per line):
-    {"describe": "...", "objects": [ {"cat": "a cat"}, {"dog": "a dog"} ], ... }
+Previous possible formats (per line):
+    1) List of single-key dicts (legacy):
+         {"objects": [ {"cat": "a cat"}, {"dog": "a dog"} ] }
+    2) Flat dict:
+         {"objects": {"cat": "a cat", "dog": "a dog"} }
+    3) Nested dict wrapper:
+         {"objects": {"objects": {"cat": "a cat", "dog": "a dog"}} }
 
-Intermediate (previous) flat dict format (for reference):
-    {"describe": "...", "objects": {"cat": "a cat", "dog": "a dog"}, ... }
-
-New nested format:
-    {"describe": "...", "objects": {"objects": {"cat": "a cat", "dog": "a dog"}}, ... }
+Target arrays format:
+    {"objects": {"names": ["cat", "dog"], "description": ["a cat", "a dog"]}}
 
 Rules:
-- If line lacks 'objects' or it's already in nested format (contains 'objects' key whose value is a dict containing 'objects'), it's passed through unchanged.
-- If 'objects' is a list, only dictionary entries with exactly one key are used.
-- If 'objects' is a flat dict (previous migration), it will be wrapped under {"objects": <flat>}.
-- First occurrence of a key wins; duplicates are ignored when building from list.
-- Non-JSON lines or lines that fail to parse are copied verbatim unless --skip-invalid set.
+- First occurrence of an object name wins; order preserves first appearance.
+- Non-JSON lines copied verbatim unless --skip-invalid.
+- Lines already in arrays format (objects contains 'names' & 'description') are left unchanged.
 
-CLI Usage Examples:
-    # Convert in place (creates backup metadata.jsonl.bak)
+CLI Examples:
     uv run python scripts/qwen-image/convert_metadata_objects.py --in-place path/to/metadata.jsonl
-
-    # Convert multiple files writing side-by-side with suffix
     uv run python scripts/qwen-image/convert_metadata_objects.py -i meta1.jsonl meta2.jsonl --suffix converted
-
-    # Convert to a specific output file
     uv run python scripts/qwen-image/convert_metadata_objects.py -i meta.jsonl -o meta_new.jsonl
 """
 from __future__ import annotations
@@ -66,24 +61,46 @@ def build_parser() -> argparse.ArgumentParser:
 
 def convert_objects_field(obj: Dict[str, Any]) -> Dict[str, Any]:
     objs = obj.get("objects")
-    # Already nested new format: {'objects': {'objects': {...}}}
+    # Already in arrays schema
+    if (
+        isinstance(objs, dict)
+        and "names" in objs
+        and "description" in objs
+        and isinstance(objs.get("names"), list)
+        and isinstance(objs.get("description"), list)
+    ):
+        return obj
+    names = []
+    descriptions = []
+    seen = set()
+    flat_source: Dict[str, Any] = {}
+    # Nested dict wrapper {"objects": {...}}
     if isinstance(objs, dict) and "objects" in objs and isinstance(objs["objects"], dict):
-        return obj  # assume already correct
-    # Legacy list format
-    if isinstance(objs, list):
-        flat: Dict[str, str] = {}
+        flat_source = objs["objects"]
+    elif isinstance(objs, dict):  # flat dict
+        flat_source = objs
+    elif isinstance(objs, list):  # list of single-key dicts
         for entry in objs:
             if isinstance(entry, dict) and len(entry) == 1:
                 k, v = next(iter(entry.items()))
                 k_s = str(k)
-                if k_s not in flat:
-                    flat[k_s] = str(v)
-        obj["objects"] = {"objects": flat}
+                if k_s in seen:
+                    continue
+                seen.add(k_s)
+                names.append(k_s)
+                descriptions.append(str(v))
+        obj["objects"] = {"names": names, "description": descriptions}
         return obj
-    # Flat dict from previous migration
-    if isinstance(objs, dict):
-        obj["objects"] = {"objects": {str(k): str(v) for k, v in objs.items()}}
-        return obj
+    # Process flat_source if set
+    if flat_source:
+        for k, v in flat_source.items():
+            k_s = str(k)
+            if k_s in seen:
+                continue
+            seen.add(k_s)
+            names.append(k_s)
+            descriptions.append(str(v))
+        obj["objects"] = {"names": names, "description": descriptions}
     return obj
 
 
@@ -107,8 +124,8 @@ def process_file(src: Path, dst: Path, skip_invalid: bool) -> int:
                 before = data.get("objects")
                 data = convert_objects_field(data)
                 after = data.get("objects")
-                # Count conversions when structure changed from list or flat dict to nested dict
-                if before is not after and (isinstance(before, list) or isinstance(before, dict)):
+                # Count conversions when structure changed to arrays schema
+                if before is not after and isinstance(after, dict) and {"names", "description"} <= set(after.keys()):
                     count_converted += 1
                 json.dump(data, fout, ensure_ascii=False)
                 fout.write("\n")

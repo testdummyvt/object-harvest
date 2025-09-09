@@ -18,7 +18,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Iterator, Tuple, Dict, Any
+from typing import Iterator, Tuple, Dict, Any, List
 
 from PIL import Image
 from tqdm import tqdm
@@ -31,13 +31,11 @@ from object_harvest.logging import get_logger
 logger = get_logger(__name__)
 
 
-def iter_descriptions(ndjson_path: Path) -> Iterator[Tuple[int, str, Dict[str, str]]]:
-    """Yield (index, description, objects_dict) from an NDJSON file.
+def iter_descriptions(ndjson_path: Path) -> Iterator[Tuple[int, str, Dict[str, List[str]]]]:
+    """Yield (index, description, objects_struct) from an NDJSON file.
 
-    objects_dict is a single dictionary mapping object name -> description string
-    aggregated from any list of single-key dicts found under the "objects" field
-    (as produced by synthesis). If duplicate object names occur, the first
-    occurrence is kept and later duplicates are ignored.
+    objects_struct has shape: {"names": [obj1, obj2, ...], "description": [desc1, desc2, ...]}
+    preserving the encounter order of unique object names (first occurrence wins).
 
     Skips lines that cannot be parsed or lack a "describe" field.
     Index starts at 1 for stable file naming.
@@ -57,15 +55,31 @@ def iter_descriptions(ndjson_path: Path) -> Iterator[Tuple[int, str, Dict[str, s
             if not (isinstance(desc, str) and desc.strip()):
                 continue
             objects_field = obj.get("objects", [])
-            objects_dict: Dict[str, str] = {}
+            names: List[str] = []
+            descs: List[str] = []
             if isinstance(objects_field, list):
+                seen = set()
                 for entry in objects_field:
                     if isinstance(entry, dict) and entry:
                         k, v = next(iter(entry.items()))
                         k_str = str(k)
-                        if k_str not in objects_dict:  # keep first occurrence
-                            objects_dict[k_str] = str(v)
-            yield i, desc.strip(), objects_dict
+                        if k_str in seen:
+                            continue
+                        seen.add(k_str)
+                        names.append(k_str)
+                        descs.append(str(v))
+            elif isinstance(objects_field, dict):
+                # Support legacy flat dict or nested formats
+                inner = (
+                    objects_field["objects"]
+                    if isinstance(objects_field.get("objects"), dict)
+                    else objects_field
+                )
+                if isinstance(inner, dict):
+                    for k, v in inner.items():
+                        names.append(str(k))
+                        descs.append(str(v))
+            yield i, desc.strip(), {"names": names, "description": descs}
 
 
 def count_descriptions(ndjson_path: Path) -> int:
@@ -259,8 +273,7 @@ def main(argv: list[str] | None = None) -> int:
 
             record: Dict[str, Any] = {
                 "describe": describe,
-                # Nest objects dict inside another dict under 'objects' key per new schema
-                "objects": {"objects": objects},
+                "objects": objects,
                 "file_name": "data/" + filename,
             }
             if prompt_text != describe:

@@ -3,8 +3,8 @@
 Expected directory layout:
 
 dataset_root/
-  metadata.jsonl        # lines with at least {"file_name": "data/<image_name>"}
-  data/                 # image files referenced by metadata.jsonl
+    metadata.jsonl        # lines with at least {"file_name": "data/<image_name>", "objects": {"names": [...], "description": [...]}}
+    data/                 # image files referenced by metadata.jsonl
 
 Example:
   uv run python scripts/qwen-image/upload_data.py \
@@ -153,9 +153,6 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("Failed to create image column after mapping.")
     raw = raw.cast_column("image", HFImage())  # type: ignore
 
-    # # Optional: ensure objects column is present even if empty
-    # if "objects" not in raw.column_names:
-    #     raw = raw.add_column("objects", [None] * len(raw))
 
     logger.info(
         "Pushing dataset to hub: repo=%s, private=%s, revision=%s", args.repo_id, args.private, args.branch
