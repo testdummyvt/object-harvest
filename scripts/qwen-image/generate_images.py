@@ -31,7 +31,9 @@ from object_harvest.logging import get_logger
 logger = get_logger(__name__)
 
 
-def iter_descriptions(ndjson_path: Path) -> Iterator[Tuple[int, str, Dict[str, List[str]]]]:
+def iter_descriptions(
+    ndjson_path: Path,
+) -> Iterator[Tuple[int, str, Dict[str, List[str]]]]:
     """Yield (index, description, objects_struct) from an NDJSON file.
 
     objects_struct has shape: {"names": [obj1, obj2, ...], "description": [desc1, desc2, ...]}
@@ -103,9 +105,7 @@ def count_descriptions(ndjson_path: Path) -> int:
     return count
 
 
-def save_image(
-    img: Image.Image, out_dir: Path, stem: str, index: int, fmt: str
-) -> str:
+def save_image(img: Image.Image, out_dir: Path, stem: str, index: int, fmt: str) -> str:
     """Save PIL image as stem-<index>.<fmt> inside out_dir/data; returns path."""
     data_dir = out_dir / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -287,8 +287,16 @@ def main(argv: list[str] | None = None) -> int:
         try:
             if augmented_path.exists() and augmented_path.stat().st_size == 0:
                 augmented_path.unlink()
-        except Exception:
-            pass
+        except FileNotFoundError:
+            logger.debug(
+                "Augmented metadata file disappeared before cleanup: %s", augmented_path
+            )
+        except OSError as e:
+            logger.warning(
+                "Failed to remove empty augmented metadata file %s: %s",
+                augmented_path,
+                e,
+            )
     else:
         logger.info(
             "Done. Generated %d image(s). Augmented JSONL: %s", count, augmented_path

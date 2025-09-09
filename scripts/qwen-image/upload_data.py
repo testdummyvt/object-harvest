@@ -44,7 +44,9 @@ except ImportError:  # pragma: no cover
 def validate_dataset_root(root: Path) -> Tuple[Path, Path]:
     """Ensure required files/folders exist; return (metadata_path, data_dir)."""
     if not root.exists() or not root.is_dir():
-        raise FileNotFoundError(f"Dataset directory not found or not a directory: {root}")
+        raise FileNotFoundError(
+            f"Dataset directory not found or not a directory: {root}"
+        )
     metadata_path = root / "metadata.jsonl"
     if not metadata_path.exists():
         raise FileNotFoundError(f"metadata.jsonl missing in {root}")
@@ -84,15 +86,39 @@ def check_file_references(metadata_path: Path, data_dir: Path) -> int:
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Upload image dataset (metadata.jsonl + data/) to Hugging Face Hub")
-    p.add_argument("--dataset-dir", required=True, help="Path to dataset root containing metadata.jsonl and data/ folder")
-    p.add_argument("--repo-id", required=True, help="Target repo id (e.g. username/dataset-name)")
-    p.add_argument("--token", default=None, help="Hugging Face token (optional if already logged in or HF_TOKEN set)")
+    p = argparse.ArgumentParser(
+        description="Upload image dataset (metadata.jsonl + data/) to Hugging Face Hub"
+    )
+    p.add_argument(
+        "--dataset-dir",
+        required=True,
+        help="Path to dataset root containing metadata.jsonl and data/ folder",
+    )
+    p.add_argument(
+        "--repo-id", required=True, help="Target repo id (e.g. username/dataset-name)"
+    )
+    p.add_argument(
+        "--token",
+        default=None,
+        help="Hugging Face token (optional if already logged in or HF_TOKEN set)",
+    )
     p.add_argument("--private", action="store_true", help="Create the repo as private")
-    p.add_argument("--branch", default="main", help="Target branch to push to (default: main)")
-    p.add_argument("--commit-message", default="Add dataset", help="Commit message for the upload")
-    p.add_argument("--allow-existing", action="store_true", help="Do not fail if repo already exists")
-    p.add_argument("--skip-reference-check", action="store_true", help="Skip verifying that all file_name entries exist")
+    p.add_argument(
+        "--branch", default="main", help="Target branch to push to (default: main)"
+    )
+    p.add_argument(
+        "--commit-message", default="Add dataset", help="Commit message for the upload"
+    )
+    p.add_argument(
+        "--allow-existing",
+        action="store_true",
+        help="Do not fail if repo already exists",
+    )
+    p.add_argument(
+        "--skip-reference-check",
+        action="store_true",
+        help="Skip verifying that all file_name entries exist",
+    )
     return p
 
 
@@ -121,9 +147,13 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("No Hugging Face token provided. Use --token or set HF_TOKEN.")
 
     logger.info("Loading metadata JSONL into Dataset: %s", metadata_path)
-    ds_any = load_dataset("json", data_files={"data": str(metadata_path)})  # returns DatasetDict
+    ds_any = load_dataset(
+        "json", data_files={"data": str(metadata_path)}
+    )  # returns DatasetDict
     if not isinstance(ds_any, dict) or "data" not in ds_any:
-        raise SystemExit("Unexpected dataset structure returned by load_dataset (expected key 'data')")
+        raise SystemExit(
+            "Unexpected dataset structure returned by load_dataset (expected key 'data')"
+        )
     raw = ds_any["data"]  # datasets.Dataset
     # Safety: ensure dataset provides map and column_names attributes
     if not hasattr(raw, "map") or not hasattr(raw, "column_names"):
@@ -147,15 +177,19 @@ def main(argv: list[str] | None = None) -> int:
 
     raw = raw.map(add_image)
     if missing_file_name:
-        logger.warning("%d record(s) missing file_name; image set to null", missing_file_name)
+        logger.warning(
+            "%d record(s) missing file_name; image set to null", missing_file_name
+        )
     col_names = getattr(raw, "column_names", []) or []
     if "image" not in col_names:
         raise SystemExit("Failed to create image column after mapping.")
     raw = raw.cast_column("image", HFImage())  # type: ignore
 
-
     logger.info(
-        "Pushing dataset to hub: repo=%s, private=%s, revision=%s", args.repo_id, args.private, args.branch
+        "Pushing dataset to hub: repo=%s, private=%s, revision=%s",
+        args.repo_id,
+        args.private,
+        args.branch,
     )
     raw.push_to_hub(
         args.repo_id,

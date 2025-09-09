@@ -66,7 +66,7 @@ def extract_inner_describe(text: str) -> str:
     if '"objects"' in s:
         before = s.split('"objects"', 1)[0]
         # Remove trailing commas/braces if present
-        before = before.rsplit(',', 1)[0] if ',' in before else before
+        before = before.rsplit(",", 1)[0] if "," in before else before
         # Also strip a leading '"describe":' label if present
         m2 = re.search(r'"describe"\s*:\s*(.*)$', before, flags=re.DOTALL)
         if m2:
@@ -80,7 +80,7 @@ def extract_inner_describe(text: str) -> str:
                         return json.loads('"' + m3.group(1) + '"').strip()
                     except Exception:
                         return m3.group(1).replace('\\"', '"').strip()
-            return candidate.strip().strip('{}').strip()
+            return candidate.strip().strip("{}").strip()
 
     # Step 4: Fallback
     return s

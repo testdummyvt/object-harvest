@@ -21,6 +21,7 @@ CLI Examples:
     uv run python scripts/qwen-image/convert_metadata_objects.py -i meta1.jsonl meta2.jsonl --suffix converted
     uv run python scripts/qwen-image/convert_metadata_objects.py -i meta.jsonl -o meta_new.jsonl
 """
+
 from __future__ import annotations
 
 import argparse
@@ -34,12 +35,20 @@ logger = get_logger(__name__)
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Convert metadata.jsonl objects list -> dict format")
-    p.add_argument(
-        "-i", "--input", nargs="+", required=True, help="One or more metadata.jsonl files to convert"
+    p = argparse.ArgumentParser(
+        description="Convert metadata.jsonl objects list -> dict format"
     )
     p.add_argument(
-        "-o", "--output", help="Single output file (only valid when exactly one input provided)"
+        "-i",
+        "--input",
+        nargs="+",
+        required=True,
+        help="One or more metadata.jsonl files to convert",
+    )
+    p.add_argument(
+        "-o",
+        "--output",
+        help="Single output file (only valid when exactly one input provided)",
     )
     p.add_argument(
         "--suffix",
@@ -75,7 +84,11 @@ def convert_objects_field(obj: Dict[str, Any]) -> Dict[str, Any]:
     seen = set()
     flat_source: Dict[str, Any] = {}
     # Nested dict wrapper {"objects": {...}}
-    if isinstance(objs, dict) and "objects" in objs and isinstance(objs["objects"], dict):
+    if (
+        isinstance(objs, dict)
+        and "objects" in objs
+        and isinstance(objs["objects"], dict)
+    ):
         flat_source = objs["objects"]
     elif isinstance(objs, dict):  # flat dict
         flat_source = objs
@@ -106,7 +119,10 @@ def convert_objects_field(obj: Dict[str, Any]) -> Dict[str, Any]:
 
 def process_file(src: Path, dst: Path, skip_invalid: bool) -> int:
     count_converted = 0
-    with src.open("r", encoding="utf-8") as fin, dst.open("w", encoding="utf-8") as fout:
+    with (
+        src.open("r", encoding="utf-8") as fin,
+        dst.open("w", encoding="utf-8") as fout,
+    ):
         for line_no, line in enumerate(fin, start=1):
             stripped = line.rstrip("\n")
             if not stripped.strip():
@@ -116,7 +132,9 @@ def process_file(src: Path, dst: Path, skip_invalid: bool) -> int:
                 data = json.loads(stripped)
             except Exception as e:
                 if skip_invalid:
-                    logger.warning("Skipping invalid JSON line %s:%d (%s)", src, line_no, e)
+                    logger.warning(
+                        "Skipping invalid JSON line %s:%d (%s)", src, line_no, e
+                    )
                     continue
                 fout.write(line)
                 continue
@@ -125,7 +143,11 @@ def process_file(src: Path, dst: Path, skip_invalid: bool) -> int:
                 data = convert_objects_field(data)
                 after = data.get("objects")
                 # Count conversions when structure changed to arrays schema
-                if before is not after and isinstance(after, dict) and {"names", "description"} <= set(after.keys()):
+                if (
+                    before is not after
+                    and isinstance(after, dict)
+                    and {"names", "description"} <= set(after.keys())
+                ):
                     count_converted += 1
                 json.dump(data, fout, ensure_ascii=False)
                 fout.write("\n")
@@ -173,7 +195,9 @@ def main(argv: list[str] | None = None) -> int:
             logger.info("Converting %s -> %s", src, dst)
             converted = process_file(src, dst, skip_invalid=args.skip_invalid)
         total_converted += converted
-        logger.info("Converted %d line(s) with list->dict objects in %s", converted, src)
+        logger.info(
+            "Converted %d line(s) with list->dict objects in %s", converted, src
+        )
 
     logger.info("Done. Total lines converted: %d", total_converted)
     return 0
