@@ -1,6 +1,6 @@
 [project]
 name = "object-harvest"
-version = "0.2.0"
+version = "0.3.0"
 description = "Generate object detection labels using vision models."
 readme = "README.md"
 requires-python = ">=3.12"
