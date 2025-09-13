@@ -18,6 +18,16 @@ Extract object suggestions from images using Vision-Language Models (VLMs), perf
   - `detect` — open-vocabulary detection via GroundingDINO or VLM-backed detection
   - `synthesis` — generate one-line descriptions from a list of objects
 
+### Qwen-Image helpers (scripts)
+
+This repo also includes optional helpers for image generation and dataset publishing under `scripts/qwen-image/`:
+
+- `generate_images.py` — read synthesis NDJSON/JSONL (`describe` + legacy objects) and generate one image per line using Qwen-Image. Produces `metadata.jsonl` + `data/` images. Objects are stored in the new arrays schema: `{ "objects": { "names": [...], "description": [...] } }`.
+- `convert_metadata_objects.py` — migrate legacy `objects` encodings (list of dicts, flat dict, nested) into the arrays schema.
+- `upload_data.py` — create a Hugging Face `datasets` dataset from `metadata.jsonl` + images and push it to the Hub.
+
+See full usage in `scripts/qwen-image/README.md`.
+
 ## Installation
 
 This project uses a `src/` layout and is installable (setuptools backend). Prefer `uv` for environment management.
@@ -161,6 +171,9 @@ Flags (synthesis):
 - `--out` optional; if omitted, prints to stdout
  - `--save-batch-size <N>` (only for .jsonl) append results in batches of N for durability during long runs
 
+Note:
+- The synthesis prompt template was updated to encourage short visual descriptors and strict JSON structure from the LLM. The CLI still returns legacy per-object entries as a list of single-key dicts for compatibility with existing consumers. The Qwen-Image generation pipeline normalizes these into arrays.
+
 
 ## Output
 
@@ -197,6 +210,32 @@ Synthesis (.json or .jsonl records):
 
 When writing `.jsonl` with `--save-batch-size`, results are appended in batches for resilience. A live progress bar shows GPM.
 
+### Generated image dataset format (Qwen-Image helpers)
+
+When using `scripts/qwen-image/generate_images.py`, outputs are organized as:
+
+```
+<out_dir>/
+  data/                # image files
+  metadata.jsonl       # one JSON object per image
+```
+
+Each metadata line contains at least:
+
+```json
+{
+  "describe": "a cat sitting on a chair",
+  "objects": {
+    "names": ["cat", "chair"],
+    "description": ["a small striped cat", "a wooden chair"]
+  },
+  "file_name": "data/coco-0001.jpg"
+}
+```
+
+- If prompt enhancement is enabled, an additional `enhanced_describe` field is included.
+- The `convert_metadata_objects.py` script can migrate earlier `objects` formats to this arrays schema.
+
 ## Notes
 
 - Describe is production-ready; detection is W.I.P and does not work as of now (implementations pending). Synthesis uses the LLM API.
@@ -215,6 +254,7 @@ When writing `.jsonl` with `--save-batch-size`, results are appended in batches 
   - `vlm.py`: prompt logic for NDJSON describe using the unified client
   - `detection.py`: detection backends (GroundingDINO, VLM-backed JSON grounding) and parsers
   - `synthesis.py`: one-line description + per-object phrasing generation
+  - Prompt template enforces strict JSON and descriptor usage; return format remains a list of single-key dicts for compatibility.
   - `utils/clients.py`: unified OpenAI-compatible client (`AIClient`)
   - `utils/__init__.py`: `RateLimiter`, JSONL batch helpers, tqdm GPM helper
   - `writer.py`: writes per-image JSON files; also supports raw NDJSON via `write_text`

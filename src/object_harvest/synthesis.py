@@ -14,13 +14,24 @@ load_dotenv()
 
 
 PROMPT_TEMPLATE = (
-    "You are a concise captioning assistant. Using ONLY the following objects, write a single one-line vivid scene description that naturally includes all of them without listing format: {objects}. "
-    "Avoid meta phrases like 'in this image' or 'this picture shows'. Then output STRICT JSON with two keys:\n"
+    "You are a concise captioning assistant. Using ONLY the following objects — each supplied with a short visual descriptor (color, size, texture, or lighting) — write a vivid one-line scene description that naturally includes all of them without using a list format: {objects}\n\n"
+    'Format requirement for {objects}: provide a comma-separated list where each entry is "object_name — short visual descriptor" (for example: rose — deep crimson, velvety petals; lantern — brass, warm glow). The assistant must use those visual descriptors when composing the scene.\n\n'
+    "Avoid meta phrases like 'in this image' or 'this picture shows'.\n\n"
+    "Then output STRICT JSON with exactly two keys and valid JSON syntax (no extra text outside the JSON):\n\n"
     "{{\n"
     '  "describe": "<the one-line description>",\n'
-    '  "objects": [{{"<object_1>": "<object_1 phrasing as used within the description>"}}, {{"<object_2>": "<object_2 phrasing as used within the description>"}}]\n'
-    "}}\n"
-    "Rules:\n- Use the exact object names from the provided list as keys.\n- Keep object descriptions concise and consistent with the wording in the main description.\n- Output JSON only (no backticks, no extra text)."
+    '  "objects": [\n'
+    '    {{"<object_1>": "<the exact object_1 phrasing as used within the description>"}},\n'
+    '    {{"<object_2>": "<the exact object_2 phrasing as used within the description>"}}\n'
+    "  ]\n"
+    "}}\n\n"
+    "Rules:\n"
+    '- Use the exact object names (the part before the "—") from the provided list as JSON keys.\n'
+    "- The object values in the JSON must match exactly how each object (including its short visual descriptor) appears in the main description.\n"
+    "- Do not add or remove objects; include every provided object exactly once.\n"
+    '- If a person is present among the objects, explicitly mention the type of clothing that person is wearing (brief, descriptive phrase) and, if possible, name any accessories they are wearing (e.g., "linen shirt, cuffed jeans; leather satchel, gold hoop earrings"). Clothing and accessories must appear naturally within the one-line description and be reflected exactly in the corresponding object value in the JSON.\n'
+    "- Keep object descriptions consistent with the wording in the main description.\n"
+    "- Output JSON only (no backticks, no explanations, no extra characters)."
 )
 
 
