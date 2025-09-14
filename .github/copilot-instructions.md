@@ -1,6 +1,6 @@
 # AI agent guide for object-harvest
 
-Purpose: Extract NDJSON object suggestions from images using Vision-Language Models (VLMs), perform open-vocabulary detection (gdino or VLM-backed), and synthesize one-line descriptions from object lists—writing one file per image.
+Purpose: Extract NDJSON object suggestions from images using Vision-Language Models (VLMs), perform open-vocabulary detection (HF zero-shot models like GroundingDINO/LLMDet), and synthesize one-line descriptions—writing one file per image.
 
 ## Snapshot
 - Python 3.12, src-layout: `src/object_harvest/`
@@ -13,14 +13,14 @@ Purpose: Extract NDJSON object suggestions from images using Vision-Language Mod
 - `cli.py` — subcommands:
   - `describe` — flags: `--input`, `--out`, `--model`, `--api-base`, `--max-workers`, `--rpm`, `--batch`, `--resume`.
     - Emits one `.ndjson` per image: each line is `{ "object": "short description" }`. Include people when present.
-  - `detect` — flags: `--input`, `--out`, `--backend {gdino,vlm}`, `--hf-model` (gdino), `--model`/`--api-base` (vlm), `--from-describe` | `--objects`, `--text`, `--threshold`, `--max-workers`, `--batch`, `--resume`.
+  - `detect` — flags: `--input`, `--out`, `--hf-model`, `--from-describe` | `--objects`, `--text`, `--threshold`, `--max-workers`, `--batch`, `--resume`.
   - `synthesis` — flags: `--objects` (file or comma list), `--num-objects` (alias `--n`), `--count`, `--rpm`, `--max-workers`, `--model`, `--api-base`, `--out`.
 - `reader.py` — yields items from a folder or list file; items have `path` or `url` plus `id`.
 - `vlm.py` — VLM prompt logic using the unified `AIClient` (from `utils/clients.py`); loads `.env` via `dotenv.load_dotenv()`. Sends prompt + image (URL or JPEG data URL). Default temp 0.01, tokens 1024. Describe prompt returns NDJSON lines.
 - `writer.py` — `JSONDirWriter` creates a unique run dir and writes one file per image; supports JSON via `write` and raw NDJSON via `write_text`. `JSONLWriter` kept for legacy.
 - `utils/__init__.py` — `RateLimiter` (RPM, sliding window), JSONL batch helpers, tqdm GPM helper.
 - `utils/clients.py` — `AIClient` unified OpenAI-compatible client to be shared across threads.
-- `detection.py` — `run_gdino_detection` (transformers pipeline) and `run_vlm_detection` (VLM JSON grounding via `AIClient`) returning detections.
+- `detection.py` — `run_gdino_detection` using Hugging Face `transformers` zero-shot OD models; JSON parser helpers retained.
 - `synthesis.py` — `synthesize_one_line` generates one-line description plus per-object phrasings from a list of objects; accepts an optional `AIClient` for reuse.
 
 ## Conventions/patterns
@@ -47,6 +47,6 @@ Purpose: Extract NDJSON object suggestions from images using Vision-Language Mod
 - Don’t add duplicate log handlers; always use `get_logger`.
 - Ensure `.env` is discoverable (CWD) or export vars in shell when running outside repo root.
 - Set a reasonable `--rpm` with high `--max-workers` to avoid 429s; keep one `OpenAI` client per process.
-- For `detect --backend gdino`, install `transformers` and `torch`, and set an appropriate HF model id.
+- For detection, install `transformers` and `torch`, and set an appropriate HF model id (e.g., `iSEE-Laboratory/llmdet_large`).
 
 References: `pyproject.toml`, `README.md`, `.env.example`, `src/object_harvest/*.py`.

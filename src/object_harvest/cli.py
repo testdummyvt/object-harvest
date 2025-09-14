@@ -13,7 +13,7 @@ from object_harvest.reader import iter_images
 from object_harvest.vlm import describe_objects_ndjson
 from object_harvest.synthesis import synthesize_one_line
 from object_harvest.utils.clients import AIClient
-from object_harvest.detection import run_gdino_detection, run_vlm_detection
+from object_harvest.detection import run_gdino_detection
 from object_harvest.writer import JSONDirWriter
 from object_harvest.utils import (
     RateLimiter,
@@ -140,9 +140,10 @@ def _run_describe(args: argparse.Namespace) -> int:
 def _add_detect_parser(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser(
         "detect",
-        help="Open-vocabulary detection using models like GroundingDINO or LLMDet",
+        help="Open-vocabulary detection with HF models (GroundingDINO/LLMDet)",
         description=(
-            "Perform description- or object-based detections. Can optionally read objects per-image from a previous describe run."
+            "Perform object-grounded detections using Hugging Face models that support zero-shot OD. "
+            "Can optionally read objects per-image from a previous describe run."
         ),
     )
     p.add_argument(
@@ -152,20 +153,9 @@ def _add_detect_parser(sub: argparse._SubParsersAction) -> None:
         "--out", required=True, help="Output folder for per-image detection JSON files"
     )
     p.add_argument(
-        "--backend", choices=["gdino", "vlm"], default="gdino", help="Detection backend"
-    )
-    p.add_argument(
-        "--hf-model", default=None, help="Hugging Face model id for the chosen backend"
-    )
-    p.add_argument(
-        "--model",
-        default=os.getenv("OBJH_MODEL", "qwen/qwen2.5-vl-72b-instruct"),
-        help="VLM model name for --backend vlm",
-    )
-    p.add_argument(
-        "--api-base",
-        default=os.getenv("OBJH_API_BASE"),
-        help="OpenAI-compatible base URL for --backend vlm",
+        "--hf-model",
+        default=None,
+        help="Hugging Face model id (e.g., iSEE-Laboratory/llmdet_large)",
     )
     p.add_argument(
         "--from-describe",
@@ -256,17 +246,12 @@ def _parse_objects_arg(arg: str | None) -> list[str]:
 
 
 def _detect_backend_available(backend: str) -> bool:
-    if backend == "gdino":
-        import importlib.util
+    import importlib.util
 
-        return importlib.util.find_spec("transformers") is not None
-    if backend == "vlm":
-        return True
-    return False
+    return importlib.util.find_spec("transformers") is not None
 
 
 def _run_detection_on_item(
-    backend: str,
     hf_model: str | None,
     threshold: float,
     item: dict,
@@ -276,12 +261,13 @@ def _run_detection_on_item(
     """Stub detection runner. Emits empty detections if backend not available."""
     path = item.get("path") or item.get("url")
     detections: list[dict] = []
-    if _detect_backend_available(backend):
-        # TODO: implement model loading/inference for selected backend
-        pass
+    if _detect_backend_available("gdino"):
+        detections = run_gdino_detection(
+            item, labels, threshold=threshold, hf_model=hf_model, text=text_prompt
+        )
     else:
         logger.warning(
-            f"backend '{backend}' not available. Install transformers/torch and configure model (hf-model). Emitting empty detections."
+            "transformers/torch not available. Install them and set --hf-model. Emitting empty detections."
         )
     return {"image": path, "detections": detections}
 
@@ -325,12 +311,6 @@ def _run_detect(args: argparse.Namespace) -> int:
     with ThreadPoolExecutor(max_workers=args.max_workers) as ex:
         futures = []
         future_to_image: dict = {}
-        client_vlm = (
-            AIClient(model=args.model, base_url=args.api_base)
-            if args.backend == "vlm"
-            else None
-        )
-
         for item in items:
             image_ref = item.get("path") or item.get("url") or "image"
             stem = safe_stem(image_ref)
@@ -338,24 +318,14 @@ def _run_detect(args: argparse.Namespace) -> int:
                 continue
 
             labels = labels_for_item(item)
-            if args.backend == "gdino":
-                fut = ex.submit(
-                    run_gdino_detection,
-                    item,
-                    labels,
-                    args.threshold,
-                    args.hf_model,
-                    args.text,
-                )
-            elif args.backend == "vlm":
-                fut = ex.submit(
-                    run_vlm_detection,
-                    client_vlm,  # type: ignore[arg-type]
-                    item,
-                    labels,
-                )
-            else:
-                continue
+            fut = ex.submit(
+                run_gdino_detection,
+                item,
+                labels,
+                args.threshold,
+                args.hf_model,
+                args.text,
+            )
             futures.append(fut)
             future_to_image[fut] = image_ref
 

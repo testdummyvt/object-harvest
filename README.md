@@ -15,7 +15,7 @@ Extract object suggestions from images using Vision-Language Models (VLMs), perf
 - Batched JSONL saving for synthesis via `--save-batch-size` to improve durability with many workers
 - Subcommands:
   - `describe` — suggest objects as NDJSON lines (includes people when present)
-  - `detect` — open-vocabulary detection via GroundingDINO or VLM-backed detection
+  - `detect` — open-vocabulary detection via Hugging Face models (GroundingDINO/LLMDet)
   - `synthesis` — generate one-line descriptions from a list of objects
 
 ### Qwen-Image helpers (scripts)
@@ -127,24 +127,22 @@ object-harvest describe --input ./images --out ./out/run-20250822-104455-ab12cd3
 
 ### Detect (open-vocabulary detection)
 
-Status: W.I.P — detection is not functional yet. The CLI and output schema are in place; implementations are pending.
-
 Use detections based on a list of objects or reuse the objects produced by a previous describe run:
 
 ```bash
 object-harvest detect \
   --input ./images \
   --out ./detections \
-  --backend gdino \
-  --hf-model IDEAS-LAB/grounding-dino-base \
+  --hf-model iSEE-Laboratory/llmdet_large \
   --from-describe ./out/run-20250822-104455-ab12cd34 \
-  --threshold 0.25 \
+  --threshold 0.4 \
   --max-workers 8 \
   --resume
 ```
 
 Notes:
-- Backends: `gdino` (GroundingDINO via transformers) and `vlm` (VLM-backed detection). For `gdino`, install `transformers` and `torch` and set `--hf-model`. You can optionally pass `--text` to use a free-form description prompt.
+- Detection uses Hugging Face models implementing zero-shot object detection such as `iSEE-Laboratory/llmdet_large` or GroundingDINO variants. Install `transformers` and `torch` and set `--hf-model` to the desired model id.
+- You can optionally pass `--text` to use a free-form description prompt in addition to, or instead of, `--objects`.
 - Objects can come from a previous describe run (`--from-describe`) or via `--objects` (either a file path or a comma-separated list).
 
 ### Synthesis (generate one-line description + per-object phrasings)
@@ -238,7 +236,7 @@ Each metadata line contains at least:
 
 ## Notes
 
-- Describe is production-ready; detection is W.I.P and does not work as of now (implementations pending). Synthesis uses the LLM API.
+- Describe is production-ready; detection supports HF zero-shot models (e.g., LLMDet/GroundingDINO). Synthesis uses the LLM API.
 - A single OpenAI-compatible client is shared across threads. Use `--rpm` to avoid provider rate limits.
 - Supported image types: `.jpg`, `.jpeg`, `.png`, `.webp`, `.bmp`, `.tiff`.
 
@@ -252,7 +250,7 @@ Each metadata line contains at least:
   - `cli.py`: argument parsing and orchestration
   - `reader.py`: iterates inputs (folder or list file)
   - `vlm.py`: prompt logic for NDJSON describe using the unified client
-  - `detection.py`: detection backends (GroundingDINO, VLM-backed JSON grounding) and parsers
+  - `detection.py`: HF zero-shot detection (GroundingDINO/LLMDet) and JSON parsers
   - `synthesis.py`: one-line description + per-object phrasing generation
   - Prompt template enforces strict JSON and descriptor usage; return format remains a list of single-key dicts for compatibility.
   - `utils/clients.py`: unified OpenAI-compatible client (`AIClient`)

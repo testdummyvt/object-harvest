@@ -1,24 +1,27 @@
-"""Detection backends and VLM detection JSON parsing/validation utilities."""
+"""Detection utilities and VLM detection JSON parsing/validation helpers.
+
+Currently supports Hugging Face zero-shot object detectors (e.g., GroundingDINO/LLMDet)
+via ``transformers``. The VLM-backed detection route has been removed from the CLI,
+but the JSON parser remains available for compatibility/tests.
+"""
 
 from __future__ import annotations
 
 import json
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from PIL import Image
 from dotenv import load_dotenv
 
 from object_harvest.logging import get_logger
-from object_harvest.utils.clients import AIClient
-from object_harvest.utils.images import load_image_from_item, image_part_from_item
+from object_harvest.utils.images import load_image_from_item
 
 logger = get_logger(__name__)
 load_dotenv()
 
 __all__ = [
     "run_gdino_detection",
-    "run_vlm_detection",
     "parse_vlm_detections_json",
 ]
 
@@ -35,6 +38,46 @@ def _load_image(item: Dict[str, Any]) -> Image.Image:
     return load_image_from_item(item)
 
 
+_MODEL_CACHE: dict[str, Tuple[Any, Any, str]] = {}
+_MODEL_LOCK: Any = None
+
+
+def _get_model_lock():
+    global _MODEL_LOCK
+    if _MODEL_LOCK is None:
+        import threading as _threading
+
+        _MODEL_LOCK = _threading.Lock()
+    return _MODEL_LOCK
+
+
+def _load_hf_ovd(model_id: str) -> Tuple[Any, Any, str]:
+    """Load and cache an HF zero-shot OD model + processor. Returns (processor, model, device)."""
+    try:
+        import torch  # type: ignore
+        from transformers import (  # type: ignore
+            AutoModelForZeroShotObjectDetection,
+            AutoProcessor,
+        )
+    except Exception as e:
+        logger.warning(f"transformers/torch not available for detection: {e}")
+        raise
+
+    lock = _get_model_lock()
+    with lock:
+        cached = _MODEL_CACHE.get(model_id)
+        if cached is not None:
+            return cached
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        processor = AutoProcessor.from_pretrained(model_id)
+        model = AutoModelForZeroShotObjectDetection.from_pretrained(model_id)
+        model = model.to(device)
+        model.eval()
+        _MODEL_CACHE[model_id] = (processor, model, device)
+        return _MODEL_CACHE[model_id]
+
+
 def run_gdino_detection(
     item: Dict[str, Any],
     labels: Optional[List[str]],
@@ -42,96 +85,137 @@ def run_gdino_detection(
     hf_model: Optional[str] = None,
     text: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    """Run zero-shot object detection using GroundingDINO via transformers pipeline.
+    """Run zero-shot object detection using HF models (GroundingDINO/LLMDet).
 
-    Returns list of {label, score, bbox: {xmin,ymin,xmax,ymax}} with bbox in pixel coordinates.
+    Uses ``AutoProcessor`` and ``AutoModelForZeroShotObjectDetection`` with model-specific
+    post-processing if available. Returns list of normalized detections with pixel bboxes.
     """
-    try:
-        from transformers import pipeline  # type: ignore
-    except Exception as e:
-        logger.warning(f"transformers not available for gdino: {e}")
-        return []
-
-    if not labels and not (text and text.strip()):
-        logger.warning(
-            "gdino backend requires either non-empty labels or a text description"
-        )
-        return []
-
     model_id = hf_model or os.environ.get(
-        "OBJH_GDINO_MODEL", "IDEA-Research/grounding-dino-base"
+        "OBJH_GDINO_MODEL", "iSEE-Laboratory/llmdet_large"
     )
-    pipe = pipeline("zero-shot-object-detection", model=model_id)
+
+    try:
+        processor, model, device = _load_hf_ovd(model_id)
+    except Exception:
+        return []
+
+    if not labels and not (text and str(text).strip()):
+        logger.warning("detection requires non-empty --objects or --text")
+        return []
 
     image = _load_image(item)
-    # Prefer text description if provided; otherwise use candidate labels
-    if text and text.strip():
-        try:
-            outputs = pipe(image, text=text, threshold=threshold)
-        except TypeError:
-            # Fallback: some implementations expect 'candidate_labels' only; try splitting text to labels
-            fallback_labels = (
-                [s.strip() for s in text.split(",") if s.strip()] or labels or []
+    width, height = image.width, image.height
+
+    # Build text prompts: list[list[str]] per batch; single image => outer list of one
+    prompt_items: List[str] = []
+    if labels:
+        prompt_items.extend([str(x) for x in labels if str(x).strip()])
+    if text and str(text).strip():
+        # If labels absent, derive from comma-separated text; else treat as additional hint
+        if not prompt_items:
+            prompt_items = [s.strip() for s in str(text).split(",") if s.strip()]
+        else:
+            prompt_items.append(str(text).strip())
+    if not prompt_items:
+        return []
+
+    try:
+        import torch  # type: ignore
+
+        inputs = processor(images=image, text=[prompt_items], return_tensors="pt")
+        inputs = {k: v.to(device) if hasattr(v, "to") else v for k, v in inputs.items()}
+        with torch.no_grad():
+            outputs = model(**inputs)
+
+        # Prefer model-specific grounded post-process if available
+        results = None
+        if hasattr(processor, "post_process_grounded_object_detection"):
+            results = processor.post_process_grounded_object_detection(
+                outputs, threshold=threshold, target_sizes=[(height, width)]
             )
-            outputs = pipe(image, candidate_labels=fallback_labels, threshold=threshold)
-    else:
-        outputs = pipe(image, candidate_labels=labels, threshold=threshold)
-    detections: List[Dict[str, Any]] = []
-    for det in outputs:
-        # transformers returns bbox as dict with xmin/xmax/ymin/ymax
-        bbox = det.get("box") or det.get("bbox") or {}
-        xmin = _as_float(bbox.get("xmin", bbox.get("x1", 0)))
-        ymin = _as_float(bbox.get("ymin", bbox.get("y1", 0)))
-        xmax = _as_float(bbox.get("xmax", bbox.get("x2", 0)))
-        ymax = _as_float(bbox.get("ymax", bbox.get("y2", 0)))
-        detections.append(
-            {
-                "label": det.get("label", "object"),
-                "score": float(det.get("score", 0.0)),
-                "bbox": {"xmin": xmin, "ymin": ymin, "xmax": xmax, "ymax": ymax},
-            }
-        )
-    return detections
+        elif hasattr(processor, "post_process_object_detection"):
+            results = processor.post_process_object_detection(
+                outputs, threshold=threshold, target_sizes=[(height, width)]
+            )
+        else:
+            # As a fallback, try transformers pipeline API (rarely needed)
+            try:
+                from transformers import pipeline  # type: ignore
+
+                pipe = pipeline("zero-shot-object-detection", model=model_id)
+                outputs = pipe(
+                    image, candidate_labels=prompt_items, threshold=threshold
+                )
+                detections: List[Dict[str, Any]] = []
+                for det in outputs:
+                    bbox = det.get("box") or det.get("bbox") or {}
+                    xmin = _as_float(bbox.get("xmin", bbox.get("x1", 0)))
+                    ymin = _as_float(bbox.get("ymin", bbox.get("y1", 0)))
+                    xmax = _as_float(bbox.get("xmax", bbox.get("x2", 0)))
+                    ymax = _as_float(bbox.get("ymax", bbox.get("y2", 0)))
+                    detections.append(
+                        {
+                            "label": det.get("label", "object"),
+                            "score": float(det.get("score", 0.0)),
+                            "bbox": {
+                                "xmin": xmin,
+                                "ymin": ymin,
+                                "xmax": xmax,
+                                "ymax": ymax,
+                            },
+                        }
+                    )
+                return detections
+            except Exception as e:  # pragma: no cover - best-effort fallback
+                logger.warning(f"pipeline fallback failed: {e}")
+                return []
+
+        if not results:
+            return []
+        result = results[0]
+        boxes = result.get("boxes") or result.get("boxes_xyxy") or []
+        scores = result.get("scores") or []
+        labels_out = result.get("labels") or []
+
+        detections: List[Dict[str, Any]] = []
+        for box, score, lbl in zip(boxes, scores, labels_out):
+            try:
+                # box may be tensor; convert to Python list of floats
+                if hasattr(box, "tolist"):
+                    box_vals = [float(x) for x in box.tolist()]
+                else:
+                    box_vals = [float(x) for x in list(box)]  # type: ignore[arg-type]
+                if len(box_vals) == 4:
+                    x1, y1, x2, y2 = box_vals
+                else:
+                    # Unexpected shape; skip
+                    continue
+                label_str = lbl if isinstance(lbl, str) else str(lbl)
+                if hasattr(score, "item"):
+                    score_val = float(score.item())
+                else:
+                    score_val = float(score)
+                detections.append(
+                    {
+                        "label": label_str,
+                        "score": score_val,
+                        "bbox": {
+                            "xmin": x1,
+                            "ymin": y1,
+                            "xmax": x2,
+                            "ymax": y2,
+                        },
+                    }
+                )
+            except Exception:
+                continue
+        return detections
+    except Exception as e:
+        logger.error(f"detection failed: {e}")
+        return []
 
 
-_VLM_DET_PROMPT_TEMPLATE = (
-    "You are an expert visual grounding system. Given an image and an optional target object list, return detections as pure JSON with a 'detections' array. "
-    "Each detection must include: label (string), score (0..1), bbox as an object with pixel coordinates: xmin, ymin, xmax, ymax (numbers). Do NOT normalize. "
-    "If a target list is provided, detect only those; otherwise, detect the most salient objects. Output only JSON.\n\n"
-    "Targets: {targets}"
-)
-
-
-def run_vlm_detection(
-    client: AIClient,
-    item: Dict[str, Any],
-    labels: Optional[List[str]],
-) -> List[Dict[str, Any]]:
-    from typing import cast
-    from openai.types.chat import (
-        ChatCompletionMessageParam,
-        ChatCompletionUserMessageParam,
-    )
-
-    targets = ", ".join(labels) if labels else "(none)"
-    prompt = _VLM_DET_PROMPT_TEMPLATE.format(targets=targets)
-
-    parts: List[dict] = [{"type": "text", "text": prompt}]
-    parts.append(image_part_from_item(item))
-
-    user_msg: ChatCompletionUserMessageParam = {
-        "role": "user",
-        "content": cast(Any, parts),
-    }
-    messages: List[ChatCompletionMessageParam] = [user_msg]
-    resp = client.client.chat.completions.create(
-        model=client.model,
-        messages=messages,
-        temperature=0.01,
-        max_tokens=800,
-    )
-    content = resp.choices[0].message.content or "{}"
-    return parse_vlm_detections_json(content)
+## VLM detection removed from CLI; JSON parser retained below
 
 
 def _clamp01(v: float) -> float:
