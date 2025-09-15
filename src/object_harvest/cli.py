@@ -266,38 +266,32 @@ def _run_detect(args: argparse.Namespace) -> int:
         stem = safe_stem(image_ref)
         return per_image_labels.get(stem) or global_labels
 
-    with ThreadPoolExecutor(max_workers=args.max_workers) as ex:
-        futures = []
-        future_to_image: dict = {}
-        for item in items:
-            image_ref = item.get("path") or item.get("url") or "image"
-            stem = safe_stem(image_ref)
-            if args.resume and stem in existing_stems:
-                continue
+    work_items: list[tuple[dict, str]] = []
+    for item in items:
+        image_ref = item.get("path") or item.get("url") or "image"
+        stem = safe_stem(image_ref)
+        if args.resume and stem in existing_stems:
+            continue
+        work_items.append((item, image_ref))
 
+    with tqdm(total=len(work_items), desc="detect", unit="img") as pbar:
+        for item, image_ref in work_items:
             labels = labels_for_item(item)
-            fut = ex.submit(
-                run_gdino_detection,
+            rec = run_gdino_detection(
                 item,
                 labels,
                 args.threshold,
                 args.hf_model,
                 args.text,
             )
-            futures.append(fut)
-            future_to_image[fut] = image_ref
-
-    for fut in tqdm(as_completed(futures), total=len(futures)):
-        rec = fut.result()
-        image_ref = future_to_image.get(fut, "image")
-        # Standardize output shape
-        out = (
-            rec
-            if (isinstance(rec, dict) and "image" in rec and "detections" in rec)
-            else {"image": image_ref, "detections": rec or []}
-        )
-        safe = safe_stem(out.get("image") or "image")
-        writer.write(f"{safe}", out)
+            out = (
+                rec
+                if (isinstance(rec, dict) and "image" in rec and "detections" in rec)
+                else {"image": image_ref, "detections": rec or []}
+            )
+            safe = safe_stem(out.get("image") or "image")
+            writer.write(f"{safe}", out)
+            pbar.update(1)
 
     logger.info(f"done. detection outputs under {writer.run_dir}")
     return 0
