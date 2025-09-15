@@ -69,11 +69,17 @@ def _load_hf_ovd(model_id: str) -> Tuple[Any, Any, str]:
         if cached is not None:
             return cached
 
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        if torch.cuda.is_available():
+            device = "cuda"
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            device = "mps"
+        else:
+            device = "cpu"
         processor = AutoProcessor.from_pretrained(model_id)
         model = AutoModelForZeroShotObjectDetection.from_pretrained(model_id)
         model = model.to(device)
         model.eval()
+        logger.info(f"loaded detector model '{model_id}' on device '{device}'")
         _MODEL_CACHE[model_id] = (processor, model, device)
         return _MODEL_CACHE[model_id]
 

@@ -24,6 +24,8 @@ def load_image_bytes_jpeg(path: str) -> bytes:
 
 
 def load_image_from_item(item: Dict[str, Any]) -> Image.Image:
+    if item.get("image") and isinstance(item.get("image"), Image.Image):
+        return item["image"].convert("RGB")
     if item.get("path"):
         return Image.open(item["path"]).convert("RGB")
     if item.get("url"):

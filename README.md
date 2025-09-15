@@ -127,7 +127,13 @@ object-harvest describe --input ./images --out ./out/run-20250822-104455-ab12cd3
 
 ### Detect (open-vocabulary detection)
 
-Use detections based on a list of objects or reuse the objects produced by a previous describe run:
+Supports three input modes:
+
+1) Images: folder or text file of image paths/URLs (requires `--objects` or `--from-describe`).
+2) JSONL: a file where each line contains `file_name` and an `objects` dict with `names` (and optionally `description`).
+3) Hugging Face dataset: same schema as JSONL (split key usually `data`).
+
+Images example (objects from previous describe):
 
 ```bash
 object-harvest detect \
@@ -138,12 +144,36 @@ object-harvest detect \
   --threshold 0.4 \
   --max-workers 8 \
   --resume
+
+JSONL example (reads objects from `objects.names`):
+
+```bash
+object-harvest detect \
+  --input ./metadata.jsonl \
+  --out ./detections \
+  --hf-model iSEE-Laboratory/llmdet_large \
+  --threshold 0.4
+```
+
+Hugging Face dataset example:
+
+```bash
+object-harvest detect \
+  --input ignored_but_required \
+  --hf-dataset testdummyvt/coco_synth_qwen3_next_0_1 \
+  --out ./detections \
+  --hf-model iSEE-Laboratory/llmdet_large \
+  --threshold 0.4
+```
 ```
 
 Notes:
-- Detection uses Hugging Face models implementing zero-shot object detection such as `iSEE-Laboratory/llmdet_large` or GroundingDINO variants. Install `transformers` and `torch` and set `--hf-model` to the desired model id.
-- You can optionally pass `--text` to use a free-form description prompt in addition to, or instead of, `--objects`.
-- Objects can come from a previous describe run (`--from-describe`) or via `--objects` (either a file path or a comma-separated list).
+- JSONL/Dataset schema:
+  - `file_name`: image path or URL
+  - `objects.names`: list of object names; `objects.description`: list of phrases
+  - Use `--use-obj-desp` to read `objects.description` instead of `objects.names`.
+- Detection uses Hugging Face models implementing zero-shot object detection such as `iSEE-Laboratory/llmdet_large` or GroundingDINO variants. Install `transformers` and `torch` and set `--hf-model`.
+- For images mode, objects can come from a previous describe run (`--from-describe`) or via `--objects` (either a file path or a comma-separated list). You can optionally pass `--text` as an additional free-form hint.
 
 ### Synthesis (generate one-line description + per-object phrasings)
 

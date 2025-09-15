@@ -13,7 +13,7 @@ Purpose: Extract NDJSON object suggestions from images using Vision-Language Mod
 - `cli.py` — subcommands:
   - `describe` — flags: `--input`, `--out`, `--model`, `--api-base`, `--max-workers`, `--rpm`, `--batch`, `--resume`.
     - Emits one `.ndjson` per image: each line is `{ "object": "short description" }`. Include people when present.
-  - `detect` — flags: `--input`, `--out`, `--hf-model`, `--from-describe` | `--objects`, `--text`, `--threshold`, `--max-workers`, `--batch`, `--resume`.
+  - `detect` — flags: `--input`, `--out`, `--hf-model`, `--hf-dataset`, `--use-obj-desp`, `--from-describe` | `--objects`, `--text`, `--threshold`, `--max-workers`, `--batch`, `--resume`.
   - `synthesis` — flags: `--objects` (file or comma list), `--num-objects` (alias `--n`), `--count`, `--rpm`, `--max-workers`, `--model`, `--api-base`, `--out`.
 - `reader.py` — yields items from a folder or list file; items have `path` or `url` plus `id`.
 - `vlm.py` — VLM prompt logic using the unified `AIClient` (from `utils/clients.py`); loads `.env` via `dotenv.load_dotenv()`. Sends prompt + image (URL or JPEG data URL). Default temp 0.01, tokens 1024. Describe prompt returns NDJSON lines.
@@ -29,6 +29,10 @@ Purpose: Extract NDJSON object suggestions from images using Vision-Language Mod
 - Unified client: `AIClient(model, base_url)` wraps `OpenAI(api_key=os.getenv("OBJH_API_KEY"), base_url=os.getenv("OBJH_API_BASE"))`; reuse a single instance per process.
 -- Image handling: open with Pillow, re-encode as JPEG, send either URL or `data:image/jpeg;base64,...`.
 - Describe outputs per image: NDJSON lines, each line a single-key JSON object `{object: description}`.
+- Detection inputs:
+- Images: folder/list; requires `--objects` or `--from-describe`.
+- JSONL: per-line JSON with `file_name` and `objects.names` (or `objects.description` with `--use-obj-desp`).
+- HF dataset: dataset with the same schema (split typically `data`).
 - Detection outputs: `{ "image": str, "detections": [{ "label": str, "score": float, "bbox": {"xmin": float, "ymin": float, "xmax": float, "ymax": float} }] }` (pixel coordinates).
 - Synthesis outputs: `{ "describe": str, "objects": [ {object: description}, ... ] }`.
 - Concurrency: `ThreadPoolExecutor`; share one `AIClient` across threads; throttle with `RateLimiter` (–-rpm); synthesis shows GPM and can batch-append to JSONL with `--save-batch-size`.

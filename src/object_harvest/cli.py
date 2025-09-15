@@ -22,6 +22,14 @@ from object_harvest.utils import (
     update_tqdm_gpm,
 )
 from object_harvest.utils.paths import safe_stem
+from object_harvest.utils.detect_inputs import (
+    iter_jsonl_input,
+    iter_hf_dataset_input,
+)
+from object_harvest.utils.objects import (
+    parse_objects_arg,
+    load_describe_objects_map,
+)
 from object_harvest.utils.runs import resolve_run_dir_base
 from tqdm import tqdm
 
@@ -158,6 +166,16 @@ def _add_detect_parser(sub: argparse._SubParsersAction) -> None:
         help="Hugging Face model id (e.g., iSEE-Laboratory/llmdet_large)",
     )
     p.add_argument(
+        "--hf-dataset",
+        default=None,
+        help="Optional Hugging Face dataset id to read inputs from (e.g., user/dataset). Overrides --input when set.",
+    )
+    p.add_argument(
+        "--use-obj-desp",
+        action="store_true",
+        help="Use objects.description instead of objects.names when reading JSONL/HF datasets",
+    )
+    p.add_argument(
         "--from-describe",
         default=None,
         help="Path to a describe run-* directory to read objects per image",
@@ -187,62 +205,7 @@ def _add_detect_parser(sub: argparse._SubParsersAction) -> None:
     p.set_defaults(command="detect")
 
 
-def _load_objects_from_file(path: str) -> list[str]:
-    with open(path, "r", encoding="utf-8") as f:
-        return [ln.strip() for ln in f if ln.strip()]
-
-
-def _load_describe_objects_map(run_dir: str) -> dict[str, list[str]]:
-    """Map safe stem -> objects[] from a describe run dir."""
-    mapping: dict[str, list[str]] = {}
-    for name in os.listdir(run_dir):
-        if not name.lower().endswith((".json", ".ndjson")):
-            continue
-        stem = os.path.splitext(name)[0]
-        try:
-            path = os.path.join(run_dir, name)
-            if name.lower().endswith(".json"):
-                with open(path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                objs = data.get("objects") or []
-                if isinstance(objs, list):
-                    mapping[stem] = [str(o) for o in objs]
-            else:
-                # NDJSON: collect keys per line
-                import json as _json
-
-                labels: list[str] = []
-                with open(path, "r", encoding="utf-8") as f:
-                    for ln in f:
-                        ln = ln.strip()
-                        if not ln:
-                            continue
-                        try:
-                            obj = _json.loads(ln)
-                            if isinstance(obj, dict) and obj:
-                                labels.extend([str(k) for k in obj.keys()])
-                        except Exception:
-                            continue
-                if labels:
-                    mapping[stem] = labels
-        except Exception:
-            continue
-    return mapping
-
-
-def _parse_objects_arg(arg: str | None) -> list[str]:
-    """Parse --objects which can be either a file path or a comma-separated list."""
-    if not arg:
-        return []
-    candidate = arg.strip()
-    # If it looks like a file path and exists, load from file
-    try:
-        if os.path.exists(candidate) and os.path.isfile(candidate):
-            return _load_objects_from_file(candidate)
-    except Exception:
-        pass
-    # Otherwise, treat as comma-separated list
-    return [s.strip() for s in candidate.split(",") if s.strip()]
+# moved helper functions into utils.objects and utils.detect_inputs
 
 
 def _detect_backend_available(backend: str) -> bool:
@@ -272,6 +235,84 @@ def _run_detection_on_item(
     return {"image": path, "detections": detections}
 
 
+def _iter_jsonl_input(jsonl_path: str, use_desc: bool = False, limit: int | None = None) -> list[dict]:
+    items: list[dict] = []
+    sel_key = "description" if use_desc else "names"
+    try:
+        with open(jsonl_path, "r", encoding="utf-8") as f:
+            for idx, ln in enumerate(f):
+                if limit and len(items) >= limit:
+                    break
+                ln = ln.strip()
+                if not ln:
+                    continue
+                try:
+                    rec = json.loads(ln)
+                except Exception:
+                    continue
+                file_name = rec.get("file_name") or rec.get("image")
+                objs = rec.get("objects") or {}
+                labels: list[str] = []
+                if isinstance(objs, dict):
+                    vals = objs.get(sel_key)
+                    if isinstance(vals, list):
+                        labels = [str(x) for x in vals if str(x).strip()]
+                if not file_name:
+                    continue
+                items.append({"path": str(file_name), "det_labels": labels})
+    except FileNotFoundError:
+        logger.error(f"jsonl not found: {jsonl_path}")
+    return items
+
+
+def _iter_hf_dataset_input(dataset_id: str, use_desc: bool = False, limit: int | None = None) -> list[dict]:
+    try:
+        from datasets import load_dataset, DatasetDict  # type: ignore
+    except Exception as e:
+        logger.error(f"datasets not available for --hf-dataset: {e}")
+        return []
+    ds = load_dataset(dataset_id)
+    # If ds is a DatasetDict, prefer 'data' split if present, else the first split
+    if isinstance(ds, DatasetDict):
+        split_key = "data" if "data" in ds else next(iter(ds.keys()))
+        sel = ds[split_key]
+    else:
+        sel = ds
+    items: list[dict] = []
+    sel_key = "description" if use_desc else "names"
+    for i, ex in enumerate(sel):
+        if limit and len(items) >= limit:
+            break
+        file_name = ex.get("file_name")
+        img = ex.get("image")
+        # Prefer passing PIL image directly if available
+        pil_image = None
+        try:
+            from PIL import Image as _PILImage  # type: ignore
+            if img is not None and isinstance(img, _PILImage.Image):
+                pil_image = img
+        except Exception:
+            pass
+        if not file_name and not pil_image:
+            # Try to extract a path-like ref from datasets Image
+            file_name = getattr(img, "filename", None) or getattr(img, "path", None)
+            if not file_name:
+                file_name = f"example-{i}.jpg"
+        labels: list[str] = []
+        objs = ex.get("objects") or {}
+        if isinstance(objs, dict):
+            vals = objs.get(sel_key)
+            if isinstance(vals, list):
+                labels = [str(x) for x in vals if str(x).strip()]
+        item: dict = {"det_labels": labels}
+        if pil_image is not None:
+            item["image"] = pil_image
+        else:
+            item["path"] = str(file_name)
+        items.append(item)
+    return items
+
+
 def _run_detect(args: argparse.Namespace) -> int:
     # Resolve run dir for outputs with resume support
     writer_base = resolve_run_dir_base(args.out, args.resume)
@@ -288,22 +329,44 @@ def _run_detect(args: argparse.Namespace) -> int:
         except FileNotFoundError:
             pass
 
-    # Objects source
-    global_labels: list[str] | None = None
-    parsed_objs = _parse_objects_arg(args.objects)
-    if parsed_objs:
-        global_labels = parsed_objs
+    # Build input items based on mode: HF dataset, JSONL, or images
+    items: list[dict]
+    if getattr(args, "hf_dataset", None):
+        items = iter_hf_dataset_input(
+            args.hf_dataset, use_desc=bool(getattr(args, "use_obj_desp", False)), limit=(args.batch if args.batch > 0 else None)
+        )
+        logger.info(f"loaded {len(items)} items from HF dataset {args.hf_dataset}")
+        global_labels: list[str] | None = None
+        per_image_labels: dict[str, list[str]] = {}
+    elif str(args.input).lower().endswith(".jsonl"):
+        items = iter_jsonl_input(
+            args.input, use_desc=bool(getattr(args, "use_obj_desp", False)), limit=(args.batch if args.batch > 0 else None)
+        )
+        logger.info(f"loaded {len(items)} items from JSONL {args.input}")
+        global_labels = None
+        per_image_labels = {}
+    else:
+        items = list(
+            iter_images(args.input, limit=args.batch if args.batch > 0 else None)
+        )
+        logger.info(f"found {len(items)} images")
+        # Objects source for plain images
+        global_labels = None
+        parsed_objs = parse_objects_arg(args.objects)
+        if parsed_objs:
+            global_labels = parsed_objs
 
-    per_image_labels: dict[str, list[str]] = {}
-    if args.from_describe:
-        # if path points to parent folder, auto-pick latest run
-        src = resolve_run_dir_base(args.from_describe, True)
-        per_image_labels = _load_describe_objects_map(src)
-
-    items = list(iter_images(args.input, limit=args.batch if args.batch > 0 else None))
-    logger.info(f"found {len(items)} images")
+        per_image_labels = {}
+        if args.from_describe:
+            # if path points to parent folder, auto-pick latest run
+            src = resolve_run_dir_base(args.from_describe, True)
+            per_image_labels = load_describe_objects_map(src)
 
     def labels_for_item(item: dict) -> list[str] | None:
+        # If labels are embedded in item (JSONL/HF dataset), prefer them
+        det = item.get("det_labels")
+        if isinstance(det, list) and det:
+            return [str(x) for x in det]
         image_ref = item.get("path") or item.get("url") or "image"
         stem = safe_stem(image_ref)
         return per_image_labels.get(stem) or global_labels
@@ -416,7 +479,7 @@ def _synthesize_text(
 
 
 def _run_synthesis(args: argparse.Namespace) -> int:
-    objs: list[str] = _parse_objects_arg(args.objects)
+    objs: list[str] = parse_objects_arg(args.objects)
     if not objs:
         logger.error("Provide --objects as a file path or comma-separated list")
         return 2
