@@ -141,13 +141,14 @@ def _run_describe(args: argparse.Namespace) -> int:
 
 
 # ----------------------- Detect subcommand -----------------------
-def _add_detect_parser(sub: argparse._SubParsersAction) -> None:
+def _add_detect_parser(sub: argparse._SubParsersAction, name: str = "detect") -> None:
+    # name parameter allows creating an alias (e.g., ovdet)
     p = sub.add_parser(
-        "detect",
-        help="Open-vocabulary detection with HF models (GroundingDINO/LLMDet)",
+        name,
+        help="Open-vocabulary detection (OVDet) with HF models (GroundingDINO/LLMDet)",
         description=(
-            "Perform object-grounded detections using Hugging Face models that support zero-shot OD. "
-            "Can optionally read objects per-image from a previous describe run."
+            "Perform open-vocabulary detections over a Hugging Face dataset using zero-shot OD models. "
+            "Sequential, dataset-only pipeline. 'detect' is deprecated; use 'ovdet'."
         ),
     )
     p.add_argument(
@@ -194,24 +195,30 @@ def _add_detect_parser(sub: argparse._SubParsersAction) -> None:
         action="store_true",
         help="Resume into an existing run dir and skip images with existing JSON outputs",
     )
-    p.set_defaults(command="detect")
+    p.set_defaults(command=name)
 
 
 """helper functions moved into utils.objects and utils.detect_inputs"""
 
 
-def _run_detect(args: argparse.Namespace) -> int:
+def _run_ovdet(args: argparse.Namespace) -> int:
     # Resolve run dir for outputs with resume support
     writer_base = resolve_run_dir_base(args.out, args.resume)
     if writer_base != args.out and args.resume:
         logger.info(f"resuming into {writer_base}")
     writer = JSONDirWriter(writer_base)
-    
-    #TODO: Currently only huggingface datasets supported
-    #Check if hf-dataset is provided
+
+    # TODO: Currently only huggingface datasets supported
+    # Check if hf-dataset is provided
     if getattr(args, "hf_dataset", None):
-        data_loader = HFDataLoader(args.hf_dataset, use_desc=bool(getattr(args, "use_obj_desp", False)), split = args.hf_dataset_split)
-        logger.info(f"loaded {len(data_loader)} items from HF dataset {args.hf_dataset}")
+        data_loader = HFDataLoader(
+            args.hf_dataset,
+            use_desc=bool(getattr(args, "use_obj_desp", False)),
+            split=args.hf_dataset_split,
+        )
+        logger.info(
+            f"loaded {len(data_loader)} items from HF dataset {args.hf_dataset}"
+        )
     else:
         logger.error("--detect currently only supports --hf-dataset mode")
         return 2
@@ -219,7 +226,7 @@ def _run_detect(args: argparse.Namespace) -> int:
     # Initialize open-vocabulary detection model
     hf_model_id = args.hf_model or OVDMODEL
     ovd_model = OVDModel(hf_model_id, threshold=args.threshold)
-    
+
     # Iterate over data_loader and perform detection
     for item in tqdm(data_loader, total=len(data_loader), desc="detect", unit="img"):
         rec = {
@@ -441,7 +448,7 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     sub.required = False  # default to 'describe' for backward-compat
 
     _add_describe_parser(sub)
-    _add_detect_parser(sub)
+    _add_detect_parser(sub, name="ovdet")  # ovdet only
     _add_synthesis_parser(sub)
 
     return p.parse_args(list(argv) if argv is not None else None)
@@ -457,8 +464,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
 
     if cmd == "describe":
         return _run_describe(args)
-    if cmd == "detect":
-        return _run_detect(args)
+    if cmd == "ovdet":
+        return _run_ovdet(args)
     if cmd == "synthesis":
         return _run_synthesis(args)
     logger.error(f"unknown command: {cmd}")
