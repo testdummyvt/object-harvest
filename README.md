@@ -146,7 +146,7 @@ Key flags (ovdet):
 - `--hf-dataset <id>`: Required. Hugging Face dataset repository id.
 - `--hf-dataset-split <split>`: Dataset split to load (default `train`).
 - `--hf-model <model_id>`: HF zero-shot OD model (e.g. `iSEE-Laboratory/llmdet_large`).
-- `--use-obj-desp`: Use `objects.description` instead of `objects.names` as prompts.
+- `--use-obj-desc`: Use `objects.description` instead of `objects.names` as prompts.
 - `--objects <file|comma,list>`: (Present but currently ignored in dataset mode; prompts are taken from dataset objects.)
 - `--threshold <float>`: Score threshold (applied during post-processing).
 - `--resume`: Skip writing detections for items already present in the output run directory.
@@ -166,7 +166,7 @@ Dataset object schema requirements:
 
 Prompt source selection:
 - By default prompts come from `objects.names`.
-- If `--use-obj-desp` is set, prompts come from `objects.description`.
+- If `--use-obj-desc` is set, prompts come from `objects.description`.
 
 Execution model:
 - Sequential processing; each sample is loaded, prompts extracted, fed to the model, detections written immediately.

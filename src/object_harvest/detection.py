@@ -68,7 +68,6 @@ class HFDataLoader:
             objects_block = ex.get("objects") or {}
             if isinstance(objects_block, dict):
                 seq = objects_block.get(sel_key) or []
-                print(seq)
                 if isinstance(seq, list):
                     for obj in seq:
                         if isinstance(obj, str) and obj.strip():
