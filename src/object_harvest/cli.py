@@ -173,7 +173,7 @@ def _add_detect_parser(sub: argparse._SubParsersAction, name: str = "detect") ->
         help="Hugging Face dataset split to use (e.g., train, validation, test)",
     )
     p.add_argument(
-        "--use-obj-desp",
+        "--use-obj-desc",
         action="store_true",
         help="Use objects.description instead of objects.names when reading JSONL/HF datasets",
     )
@@ -213,7 +213,7 @@ def _run_ovdet(args: argparse.Namespace) -> int:
     if getattr(args, "hf_dataset", None):
         data_loader = HFDataLoader(
             args.hf_dataset,
-            use_desc=bool(getattr(args, "use_obj_desp", False)),
+            use_obj_desc=args.use_obj_desc,
             split=args.hf_dataset_split,
         )
         logger.info(

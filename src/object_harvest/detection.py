@@ -68,6 +68,7 @@ class HFDataLoader:
             objects_block = ex.get("objects") or {}
             if isinstance(objects_block, dict):
                 seq = objects_block.get(sel_key) or []
+                print(seq)
                 if isinstance(seq, list):
                     for obj in seq:
                         if isinstance(obj, str) and obj.strip():
@@ -133,10 +134,9 @@ class OVDModel:
         if not prompts:
             return []
         width, height = image.width, image.height
-        inputs = self.processor(images=image, text=[prompts], return_tensors="pt")
-        inputs = {
-            k: v.to(self.device) if hasattr(v, "to") else v for k, v in inputs.items()
-        }
+        inputs = self.processor(images=image, text=[prompts], return_tensors="pt").to(
+            self.device
+        )
         with torch.no_grad():  # pragma: no cover - inference
             outputs = self.model(**inputs)
         # Prefer grounded post-process when available
@@ -150,7 +150,7 @@ class OVDModel:
             )[0]
         boxes = processed.get("boxes", [])
         scores = processed.get("scores", [])
-        labels_out = processed.get("labels", [])
+        labels_out = processed.get("text_labels", [])
         detections: List[Dict[str, Any]] = []
         for box, score, lbl in zip(boxes, scores, labels_out):
             try:
@@ -172,7 +172,10 @@ class OVDModel:
                         "bbox": {"xmin": x1, "ymin": y1, "xmax": x2, "ymax": y2},
                     }
                 )
-            except Exception:  # pragma: no cover - skip malformed
+            except Exception as e:  # pragma: no cover - skip malformed
+                logger.warning(
+                    f"skipping malformed detection box/score/label: {box}, {score}, {lbl}: {e}"
+                )
                 continue
         return detections
 
