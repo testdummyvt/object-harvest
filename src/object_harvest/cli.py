@@ -13,7 +13,7 @@ from object_harvest.reader import iter_images
 from object_harvest.vlm import describe_objects_ndjson
 from object_harvest.synthesis import synthesize_one_line
 from object_harvest.utils.clients import AIClient
-from object_harvest.detection import run_gdino_detection, run_vlm_detection
+from object_harvest.detection import HFDataLoader, OVDModel, OVDMODEL
 from object_harvest.writer import JSONDirWriter
 from object_harvest.utils import (
     RateLimiter,
@@ -22,6 +22,10 @@ from object_harvest.utils import (
     update_tqdm_gpm,
 )
 from object_harvest.utils.paths import safe_stem
+from object_harvest.utils.objects import (
+    parse_objects_arg,
+    load_describe_objects_map,
+)
 from object_harvest.utils.runs import resolve_run_dir_base
 from tqdm import tqdm
 
@@ -137,12 +141,14 @@ def _run_describe(args: argparse.Namespace) -> int:
 
 
 # ----------------------- Detect subcommand -----------------------
-def _add_detect_parser(sub: argparse._SubParsersAction) -> None:
+def _add_detect_parser(sub: argparse._SubParsersAction, name: str = "detect") -> None:
+    # name parameter allows creating an alias (e.g., ovdet)
     p = sub.add_parser(
-        "detect",
-        help="Open-vocabulary detection using models like GroundingDINO or LLMDet",
+        name,
+        help="Open-vocabulary detection (OVDet) with HF models (GroundingDINO/LLMDet)",
         description=(
-            "Perform description- or object-based detections. Can optionally read objects per-image from a previous describe run."
+            "Perform open-vocabulary detections over a Hugging Face dataset using zero-shot OD models. "
+            "Sequential, dataset-only pipeline. 'detect' is deprecated; use 'ovdet'."
         ),
     )
     p.add_argument(
@@ -152,25 +158,29 @@ def _add_detect_parser(sub: argparse._SubParsersAction) -> None:
         "--out", required=True, help="Output folder for per-image detection JSON files"
     )
     p.add_argument(
-        "--backend", choices=["gdino", "vlm"], default="gdino", help="Detection backend"
-    )
-    p.add_argument(
-        "--hf-model", default=None, help="Hugging Face model id for the chosen backend"
-    )
-    p.add_argument(
-        "--model",
-        default=os.getenv("OBJH_MODEL", "qwen/qwen2.5-vl-72b-instruct"),
-        help="VLM model name for --backend vlm",
-    )
-    p.add_argument(
-        "--api-base",
-        default=os.getenv("OBJH_API_BASE"),
-        help="OpenAI-compatible base URL for --backend vlm",
-    )
-    p.add_argument(
-        "--from-describe",
+        "--hf-model",
         default=None,
-        help="Path to a describe run-* directory to read objects per image",
+        help="Hugging Face model id (e.g., iSEE-Laboratory/llmdet_large)",
+    )
+    p.add_argument(
+        "--hf-dataset",
+        default=None,
+        help="Optional Hugging Face dataset id to read inputs from (e.g., user/dataset). Overrides --input when set.",
+    )
+    p.add_argument(
+        "--hf-dataset-split",
+        default="train",
+        help="Hugging Face dataset split to use (e.g., train, validation, test)",
+    )
+    p.add_argument(
+        "--use-obj-desc",
+        action="store_true",
+        help="Use objects.description instead of objects.names when reading JSONL/HF datasets",
+    )
+    p.add_argument(
+        "--use-describe",
+        action="store_true",
+        help="If set, looks for a sibling describe run dir (--input/../describe_*) and uses the per-image NDJSON files as object lists",
     )
     p.add_argument(
         "--objects",
@@ -178,198 +188,57 @@ def _add_detect_parser(sub: argparse._SubParsersAction) -> None:
         help="Either a path to a text file (one object per line) or a comma-separated list of object names",
     )
     p.add_argument(
-        "--text",
-        default=None,
-        help="Free-form object description prompt for GroundingDINO (optional)",
-    )
-    p.add_argument(
         "--threshold", type=float, default=0.25, help="Score threshold for detections"
     )
-    p.add_argument(
-        "--max-workers", type=int, default=min(32, (os.cpu_count() or 4) * 5)
-    )
-    p.add_argument("--batch", type=int, default=0)
     p.add_argument(
         "--resume",
         action="store_true",
         help="Resume into an existing run dir and skip images with existing JSON outputs",
     )
-    p.set_defaults(command="detect")
+    p.set_defaults(command=name)
 
 
-def _load_objects_from_file(path: str) -> list[str]:
-    with open(path, "r", encoding="utf-8") as f:
-        return [ln.strip() for ln in f if ln.strip()]
+"""helper functions moved into utils.objects and utils.detect_inputs"""
 
 
-def _load_describe_objects_map(run_dir: str) -> dict[str, list[str]]:
-    """Map safe stem -> objects[] from a describe run dir."""
-    mapping: dict[str, list[str]] = {}
-    for name in os.listdir(run_dir):
-        if not name.lower().endswith((".json", ".ndjson")):
-            continue
-        stem = os.path.splitext(name)[0]
-        try:
-            path = os.path.join(run_dir, name)
-            if name.lower().endswith(".json"):
-                with open(path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                objs = data.get("objects") or []
-                if isinstance(objs, list):
-                    mapping[stem] = [str(o) for o in objs]
-            else:
-                # NDJSON: collect keys per line
-                import json as _json
-
-                labels: list[str] = []
-                with open(path, "r", encoding="utf-8") as f:
-                    for ln in f:
-                        ln = ln.strip()
-                        if not ln:
-                            continue
-                        try:
-                            obj = _json.loads(ln)
-                            if isinstance(obj, dict) and obj:
-                                labels.extend([str(k) for k in obj.keys()])
-                        except Exception:
-                            continue
-                if labels:
-                    mapping[stem] = labels
-        except Exception:
-            continue
-    return mapping
-
-
-def _parse_objects_arg(arg: str | None) -> list[str]:
-    """Parse --objects which can be either a file path or a comma-separated list."""
-    if not arg:
-        return []
-    candidate = arg.strip()
-    # If it looks like a file path and exists, load from file
-    try:
-        if os.path.exists(candidate) and os.path.isfile(candidate):
-            return _load_objects_from_file(candidate)
-    except Exception:
-        pass
-    # Otherwise, treat as comma-separated list
-    return [s.strip() for s in candidate.split(",") if s.strip()]
-
-
-def _detect_backend_available(backend: str) -> bool:
-    if backend == "gdino":
-        import importlib.util
-
-        return importlib.util.find_spec("transformers") is not None
-    if backend == "vlm":
-        return True
-    return False
-
-
-def _run_detection_on_item(
-    backend: str,
-    hf_model: str | None,
-    threshold: float,
-    item: dict,
-    labels: list[str] | None,
-    text_prompt: str | None,
-) -> dict:
-    """Stub detection runner. Emits empty detections if backend not available."""
-    path = item.get("path") or item.get("url")
-    detections: list[dict] = []
-    if _detect_backend_available(backend):
-        # TODO: implement model loading/inference for selected backend
-        pass
-    else:
-        logger.warning(
-            f"backend '{backend}' not available. Install transformers/torch and configure model (hf-model). Emitting empty detections."
-        )
-    return {"image": path, "detections": detections}
-
-
-def _run_detect(args: argparse.Namespace) -> int:
+def _run_ovdet(args: argparse.Namespace) -> int:
     # Resolve run dir for outputs with resume support
     writer_base = resolve_run_dir_base(args.out, args.resume)
     if writer_base != args.out and args.resume:
         logger.info(f"resuming into {writer_base}")
     writer = JSONDirWriter(writer_base)
 
-    existing_stems: set[str] = set()
-    if args.resume:
-        try:
-            for name in os.listdir(writer.run_dir):
-                if name.lower().endswith(".json"):
-                    existing_stems.add(os.path.splitext(name)[0])
-        except FileNotFoundError:
-            pass
-
-    # Objects source
-    global_labels: list[str] | None = None
-    parsed_objs = _parse_objects_arg(args.objects)
-    if parsed_objs:
-        global_labels = parsed_objs
-
-    per_image_labels: dict[str, list[str]] = {}
-    if args.from_describe:
-        # if path points to parent folder, auto-pick latest run
-        src = resolve_run_dir_base(args.from_describe, True)
-        per_image_labels = _load_describe_objects_map(src)
-
-    items = list(iter_images(args.input, limit=args.batch if args.batch > 0 else None))
-    logger.info(f"found {len(items)} images")
-
-    def labels_for_item(item: dict) -> list[str] | None:
-        image_ref = item.get("path") or item.get("url") or "image"
-        stem = safe_stem(image_ref)
-        return per_image_labels.get(stem) or global_labels
-
-    with ThreadPoolExecutor(max_workers=args.max_workers) as ex:
-        futures = []
-        future_to_image: dict = {}
-        client_vlm = (
-            AIClient(model=args.model, base_url=args.api_base)
-            if args.backend == "vlm"
-            else None
+    # TODO: Currently only huggingface datasets supported
+    # Check if hf-dataset is provided
+    if getattr(args, "hf_dataset", None):
+        data_loader = HFDataLoader(
+            args.hf_dataset,
+            use_obj_desc=args.use_obj_desc,
+            split=args.hf_dataset_split,
         )
-
-        for item in items:
-            image_ref = item.get("path") or item.get("url") or "image"
-            stem = safe_stem(image_ref)
-            if args.resume and stem in existing_stems:
-                continue
-
-            labels = labels_for_item(item)
-            if args.backend == "gdino":
-                fut = ex.submit(
-                    run_gdino_detection,
-                    item,
-                    labels,
-                    args.threshold,
-                    args.hf_model,
-                    args.text,
-                )
-            elif args.backend == "vlm":
-                fut = ex.submit(
-                    run_vlm_detection,
-                    client_vlm,  # type: ignore[arg-type]
-                    item,
-                    labels,
-                )
-            else:
-                continue
-            futures.append(fut)
-            future_to_image[fut] = image_ref
-
-    for fut in tqdm(as_completed(futures), total=len(futures)):
-        rec = fut.result()
-        image_ref = future_to_image.get(fut, "image")
-        # Standardize output shape
-        out = (
-            rec
-            if (isinstance(rec, dict) and "image" in rec and "detections" in rec)
-            else {"image": image_ref, "detections": rec or []}
+        logger.info(
+            f"loaded {len(data_loader)} items from HF dataset {args.hf_dataset}"
         )
-        safe = safe_stem(out.get("image") or "image")
-        writer.write(f"{safe}", out)
+    else:
+        logger.error("--detect currently only supports --hf-dataset mode")
+        return 2
+
+    # Initialize open-vocabulary detection model
+    hf_model_id = args.hf_model or OVDMODEL
+    ovd_model = OVDModel(hf_model_id, threshold=args.threshold)
+
+    # Iterate over data_loader and perform detection
+    for item in tqdm(data_loader, total=len(data_loader), desc="detect", unit="img"):
+        rec = {
+            "id": item["id"],
+            "file_name": item["path"],
+            "detections": [],
+        }
+        if len(item["prompt"]) > 0:
+            detections = ovd_model(item["image"], item["prompt"])
+            rec["detections"] = detections
+        output_file_name = safe_stem(item["path"])
+        writer.write(output_file_name, rec)
 
     logger.info(f"done. detection outputs under {writer.run_dir}")
     return 0
@@ -446,7 +315,7 @@ def _synthesize_text(
 
 
 def _run_synthesis(args: argparse.Namespace) -> int:
-    objs: list[str] = _parse_objects_arg(args.objects)
+    objs: list[str] = parse_objects_arg(args.objects)
     if not objs:
         logger.error("Provide --objects as a file path or comma-separated list")
         return 2
@@ -579,7 +448,7 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     sub.required = False  # default to 'describe' for backward-compat
 
     _add_describe_parser(sub)
-    _add_detect_parser(sub)
+    _add_detect_parser(sub, name="ovdet")  # ovdet only
     _add_synthesis_parser(sub)
 
     return p.parse_args(list(argv) if argv is not None else None)
@@ -595,8 +464,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
 
     if cmd == "describe":
         return _run_describe(args)
-    if cmd == "detect":
-        return _run_detect(args)
+    if cmd == "ovdet":
+        return _run_ovdet(args)
     if cmd == "synthesis":
         return _run_synthesis(args)
     logger.error(f"unknown command: {cmd}")

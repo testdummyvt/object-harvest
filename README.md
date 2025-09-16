@@ -7,7 +7,7 @@ Extract object suggestions from images using Vision-Language Models (VLMs), perf
 - Inputs: folder of images or text list file (paths and/or URLs)
 - Outputs: one file per image under a unique run directory (run-YYYYMMDD-HHMMSS-<id>)
   - Describe: .ndjson (one line per object: {"object": "short description"})
-  - Detect: .json (detections array with XYXY pixel bboxes)
+  - OVDet: .json (detections array with XYXY pixel bboxes)
 - OpenAI-compatible API client (set `--api-base` for OpenRouter/others)
 - Default model: `qwen/qwen2.5-vl-72b-instruct` (override via `--model` or `OBJH_MODEL`)
 - Concurrency via threads + a shared RPM rate limiter (`--rpm`)
@@ -15,7 +15,7 @@ Extract object suggestions from images using Vision-Language Models (VLMs), perf
 - Batched JSONL saving for synthesis via `--save-batch-size` to improve durability with many workers
 - Subcommands:
   - `describe` — suggest objects as NDJSON lines (includes people when present)
-  - `detect` — open-vocabulary detection via GroundingDINO or VLM-backed detection
+  - `ovdet` — open-vocabulary detection via Hugging Face models (GroundingDINO/LLMDet) over HF datasets (sequential)
   - `synthesis` — generate one-line descriptions from a list of objects
 
 ### Qwen-Image helpers (scripts)
@@ -42,7 +42,7 @@ uv pip install -e .
 # Now the console script is on PATH
 object-harvest --help
 object-harvest describe --help
-object-harvest detect --help
+object-harvest ovdet --help
 object-harvest synthesis --help
 ```
 
@@ -125,27 +125,67 @@ You can also target a specific run directory:
 object-harvest describe --input ./images --out ./out/run-20250822-104455-ab12cd34 --resume
 ```
 
-### Detect (open-vocabulary detection)
+### OVDet (open-vocabulary detection)
 
-Status: W.I.P — detection is not functional yet. The CLI and output schema are in place; implementations are pending.
+Current implementation (latest changes) supports only Hugging Face dataset inputs. The old image/JSONL direct modes and free-form text prompting were removed in favor of a simpler, deterministic dataset-driven pipeline. Detection now runs sequentially (no thread pool) and shows a progress bar over the dataset.
 
-Use detections based on a list of objects or reuse the objects produced by a previous describe run:
+Minimal example:
 
 ```bash
-object-harvest detect \
-  --input ./images \
+object-harvest ovdet \
+  --input unused_but_required \
+  --hf-dataset your-namespace/your_dataset_id \
+  --hf-dataset-split train \
   --out ./detections \
-  --backend gdino \
-  --hf-model IDEAS-LAB/grounding-dino-base \
-  --from-describe ./out/run-20250822-104455-ab12cd34 \
-  --threshold 0.25 \
-  --max-workers 8 \
-  --resume
+  --hf-model iSEE-Laboratory/llmdet_large \
+  --threshold 0.35
 ```
 
-Notes:
-- Backends: `gdino` (GroundingDINO via transformers) and `vlm` (VLM-backed detection). For `gdino`, install `transformers` and `torch` and set `--hf-model`. You can optionally pass `--text` to use a free-form description prompt.
-- Objects can come from a previous describe run (`--from-describe`) or via `--objects` (either a file path or a comma-separated list).
+Key flags (ovdet):
+
+- `--hf-dataset <id>`: Required. Hugging Face dataset repository id.
+- `--hf-dataset-split <split>`: Dataset split to load (default `train`).
+- `--hf-model <model_id>`: HF zero-shot OD model (e.g. `iSEE-Laboratory/llmdet_large`).
+- `--use-obj-desc`: Use `objects.description` instead of `objects.names` as prompts.
+- `--objects <file|comma,list>`: (Present but currently ignored in dataset mode; prompts are taken from dataset objects.)
+- `--threshold <float>`: Score threshold (applied during post-processing).
+- `--resume`: Skip writing detections for items already present in the output run directory.
+
+Dataset object schema requirements:
+
+```jsonc
+{
+  "file_name": "relative/or/original/path/or/name.jpg", // optional if image object contains path metadata
+  "image": <PIL Image or dataset image feature>,
+  "objects": {
+    "names": ["cat", "sofa", "lamp"],
+    "description": ["black cat lounging", "fabric sofa", "tall floor lamp"]
+  }
+}
+```
+
+Prompt source selection:
+- By default prompts come from `objects.names`.
+- If `--use-obj-desc` is set, prompts come from `objects.description`.
+
+Execution model:
+- Sequential processing; each sample is loaded, prompts extracted, fed to the model, detections written immediately.
+- Device auto-selection: CUDA → MPS → CPU.
+- A one-time log line reports the model id and selected device.
+
+Outputs (per image record):
+
+```json
+{
+  "id": 42,
+  "file_name": "example.jpg",
+  "detections": [
+    {"label": "cat", "score": 0.91, "bbox": {"xmin": 10.0, "ymin": 20.0, "xmax": 120.0, "ymax": 240.0}}
+  ]
+}
+```
+
+Note: Legacy flags (`--from-describe`, `--text`, image/JSONL direct inputs, concurrency settings) are no longer active in the current OVDet implementation.
 
 ### Synthesis (generate one-line description + per-object phrasings)
 
@@ -186,7 +226,7 @@ Describe (.ndjson per image):
 {"backpack": "black backpack with a water bottle in side pocket"}
 ```
 
-Detect (.json per image):
+OVDet (.json per image):
 ```json
 {
   "image": "file_or_url",
@@ -238,7 +278,7 @@ Each metadata line contains at least:
 
 ## Notes
 
-- Describe is production-ready; detection is W.I.P and does not work as of now (implementations pending). Synthesis uses the LLM API.
+- Describe is production-ready; OVDet supports HF zero-shot models (e.g., LLMDet/GroundingDINO). Synthesis uses the LLM API.
 - A single OpenAI-compatible client is shared across threads. Use `--rpm` to avoid provider rate limits.
 - Supported image types: `.jpg`, `.jpeg`, `.png`, `.webp`, `.bmp`, `.tiff`.
 
@@ -252,7 +292,7 @@ Each metadata line contains at least:
   - `cli.py`: argument parsing and orchestration
   - `reader.py`: iterates inputs (folder or list file)
   - `vlm.py`: prompt logic for NDJSON describe using the unified client
-  - `detection.py`: detection backends (GroundingDINO, VLM-backed JSON grounding) and parsers
+  - `detection.py`: HF zero-shot detection (GroundingDINO/LLMDet)
   - `synthesis.py`: one-line description + per-object phrasing generation
   - Prompt template enforces strict JSON and descriptor usage; return format remains a list of single-key dicts for compatibility.
   - `utils/clients.py`: unified OpenAI-compatible client (`AIClient`)
@@ -264,6 +304,6 @@ Each metadata line contains at least:
 
 - 401/403 errors: verify `OBJH_API_KEY` and `OBJH_API_BASE`.
 - 429 errors: reduce `--max-workers` and/or set `--rpm`.
-- Detection backends: ensure `transformers` and `torch` are installed and the chosen HF model is available.
+- Detection backends: ensure `transformers` and `torch` are installed and the chosen HF model is available. OVDet requires a Hugging Face dataset (`--hf-dataset`).
 - Module not found: ensure `uv run -m object_harvest.cli` or `PYTHONPATH=src` when using `python -m ...`.
  

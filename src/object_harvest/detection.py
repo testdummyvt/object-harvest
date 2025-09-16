@@ -1,212 +1,181 @@
-"""Detection backends and VLM detection JSON parsing/validation utilities."""
+"""Open-vocabulary detection (OVDet) utilities.
+
+Components:
+- ``HFDataLoader``: Iterates a Hugging Face dataset split and extracts prompts
+    from ``objects.names`` (default) or ``objects.description`` when requested.
+- ``OVDModel``: Wraps a Hugging Face zero-shot object detection model
+    (GroundingDINO / LLMDet style) providing device auto-selection (CUDA→MPS→CPU)
+    and a callable interface returning normalized detections.
+"""
 
 from __future__ import annotations
 
-import json
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
-from PIL import Image
+import torch  # type: ignore
+from transformers import (  # type: ignore
+    AutoModelForZeroShotObjectDetection,
+    AutoProcessor,
+)
+from datasets import load_dataset  # type: ignore
 from dotenv import load_dotenv
-
 from object_harvest.logging import get_logger
-from object_harvest.utils.clients import AIClient
-from object_harvest.utils.images import load_image_from_item, image_part_from_item
 
 logger = get_logger(__name__)
+
+
 load_dotenv()
 
-__all__ = [
-    "run_gdino_detection",
-    "run_vlm_detection",
-    "parse_vlm_detections_json",
-]
+
+__all__ = ["HFDataLoader", "OVDModel", "OVDMODEL"]
+
+OVDMODEL = os.environ.get("OBJH_GDINO_MODEL", "iSEE-Laboratory/llmdet_large")
 
 
-def _as_float(v: Any, default: float = 0.0) -> float:
-    try:
-        return float(v)
-    except Exception:
-        return default
+class HFDataLoader:
+    """Iterate a HF dataset split yielding records for detection.
 
-
-def _load_image(item: Dict[str, Any]) -> Image.Image:
-    # Backward-compat shim; delegate to utils helper
-    return load_image_from_item(item)
-
-
-def run_gdino_detection(
-    item: Dict[str, Any],
-    labels: Optional[List[str]],
-    threshold: float = 0.25,
-    hf_model: Optional[str] = None,
-    text: Optional[str] = None,
-) -> List[Dict[str, Any]]:
-    """Run zero-shot object detection using GroundingDINO via transformers pipeline.
-
-    Returns list of {label, score, bbox: {xmin,ymin,xmax,ymax}} with bbox in pixel coordinates.
+    Each yielded item: {"id", "path", "image", "prompt"}
+    where "prompt" is a list of object labels / descriptions.
     """
-    try:
-        from transformers import pipeline  # type: ignore
-    except Exception as e:
-        logger.warning(f"transformers not available for gdino: {e}")
-        return []
 
-    if not labels and not (text and text.strip()):
-        logger.warning(
-            "gdino backend requires either non-empty labels or a text description"
-        )
-        return []
+    def __init__(
+        self,
+        dataset_id: str,
+        use_desc: bool = False,  # placeholder for future extension
+        use_obj_desc: bool = False,
+        split: str = "train",
+    ) -> None:
+        self.ds = load_dataset(dataset_id, split=split)
+        self.use_desc = use_desc  # currently unused
+        self.use_obj_desc = use_obj_desc
 
-    model_id = hf_model or os.environ.get(
-        "OBJH_GDINO_MODEL", "IDEA-Research/grounding-dino-base"
-    )
-    pipe = pipeline("zero-shot-object-detection", model=model_id)
-
-    image = _load_image(item)
-    # Prefer text description if provided; otherwise use candidate labels
-    if text and text.strip():
-        try:
-            outputs = pipe(image, text=text, threshold=threshold)
-        except TypeError:
-            # Fallback: some implementations expect 'candidate_labels' only; try splitting text to labels
-            fallback_labels = (
-                [s.strip() for s in text.split(",") if s.strip()] or labels or []
-            )
-            outputs = pipe(image, candidate_labels=fallback_labels, threshold=threshold)
-    else:
-        outputs = pipe(image, candidate_labels=labels, threshold=threshold)
-    detections: List[Dict[str, Any]] = []
-    for det in outputs:
-        # transformers returns bbox as dict with xmin/xmax/ymin/ymax
-        bbox = det.get("box") or det.get("bbox") or {}
-        xmin = _as_float(bbox.get("xmin", bbox.get("x1", 0)))
-        ymin = _as_float(bbox.get("ymin", bbox.get("y1", 0)))
-        xmax = _as_float(bbox.get("xmax", bbox.get("x2", 0)))
-        ymax = _as_float(bbox.get("ymax", bbox.get("y2", 0)))
-        detections.append(
-            {
-                "label": det.get("label", "object"),
-                "score": float(det.get("score", 0.0)),
-                "bbox": {"xmin": xmin, "ymin": ymin, "xmax": xmax, "ymax": ymax},
+    def __iter__(self):
+        sel_key = "description" if self.use_obj_desc else "names"
+        for idx, ex in enumerate(self.ds):
+            if not isinstance(ex, dict):
+                # Some streaming datasets may return other objects; skip safely
+                continue
+            file_name = ex.get("file_name")
+            image = ex.get("image")
+            if image is not None and hasattr(image, "convert"):
+                try:
+                    image = image.convert("RGB")
+                except Exception:
+                    pass
+            prompt: List[str] = []
+            objects_block = ex.get("objects") or {}
+            if isinstance(objects_block, dict):
+                seq = objects_block.get(sel_key) or []
+                if isinstance(seq, list):
+                    for obj in seq:
+                        if isinstance(obj, str) and obj.strip():
+                            prompt.append(obj.strip())
+            yield {
+                "id": idx,
+                "path": str(file_name) if file_name else f"example-{idx}.jpg",
+                "image": image,
+                "prompt": prompt,
             }
-        )
-    return detections
 
-
-_VLM_DET_PROMPT_TEMPLATE = (
-    "You are an expert visual grounding system. Given an image and an optional target object list, return detections as pure JSON with a 'detections' array. "
-    "Each detection must include: label (string), score (0..1), bbox as an object with pixel coordinates: xmin, ymin, xmax, ymax (numbers). Do NOT normalize. "
-    "If a target list is provided, detect only those; otherwise, detect the most salient objects. Output only JSON.\n\n"
-    "Targets: {targets}"
-)
-
-
-def run_vlm_detection(
-    client: AIClient,
-    item: Dict[str, Any],
-    labels: Optional[List[str]],
-) -> List[Dict[str, Any]]:
-    from typing import cast
-    from openai.types.chat import (
-        ChatCompletionMessageParam,
-        ChatCompletionUserMessageParam,
-    )
-
-    targets = ", ".join(labels) if labels else "(none)"
-    prompt = _VLM_DET_PROMPT_TEMPLATE.format(targets=targets)
-
-    parts: List[dict] = [{"type": "text", "text": prompt}]
-    parts.append(image_part_from_item(item))
-
-    user_msg: ChatCompletionUserMessageParam = {
-        "role": "user",
-        "content": cast(Any, parts),
-    }
-    messages: List[ChatCompletionMessageParam] = [user_msg]
-    resp = client.client.chat.completions.create(
-        model=client.model,
-        messages=messages,
-        temperature=0.01,
-        max_tokens=800,
-    )
-    content = resp.choices[0].message.content or "{}"
-    return parse_vlm_detections_json(content)
-
-
-def _clamp01(v: float) -> float:
-    try:
-        fv = float(v)
-    except Exception:
-        return 0.0
-    if fv < 0.0:
-        return 0.0
-    if fv > 1.0:
-        return 1.0
-    return fv
-
-
-def parse_vlm_detections_json(content: str) -> List[Dict[str, Any]]:
-    """Parse and strictly validate a VLM detection JSON string.
-
-    Rules:
-    - Top-level must be an object with key 'detections' as a list.
-    - Each detection must include 'label' (str) and 'bbox' (object with numeric xmin,ymin,xmax,ymax) in pixel coordinates.
-    - 'score' is optional; defaults to 0.0. Score is clamped to [0,1].
-    - Detections failing validation are dropped.
-    Returns a list of normalized detections: {label:str, score:float, bbox:{xmin,ymin,xmax,ymax}}.
-    """
-    try:
-        parsed = json.loads(content)
-    except Exception as e:
-        logger.error(f"VLM detection JSON parse error: {e}. Raw: {content[:200]}")
-        return []
-
-    if not isinstance(parsed, dict):
-        logger.warning("VLM detection JSON must be an object at top level")
-        return []
-
-    dets = parsed.get("detections")
-    if not isinstance(dets, list):
-        logger.warning("VLM detection JSON must contain 'detections' as a list")
-        return []
-
-    normalized: List[Dict[str, Any]] = []
-    for i, d in enumerate(dets):
-        if not isinstance(d, dict):
-            logger.warning(f"skip detection[{i}]: not an object")
-            continue
-        label = d.get("label")
-        if not isinstance(label, str) or not label.strip():
-            logger.warning(f"skip detection[{i}]: missing/invalid 'label'")
-            continue
-        bbox = d.get("bbox")
-        if not isinstance(bbox, dict):
-            logger.warning(f"skip detection[{i}]: missing/invalid 'bbox'")
-            continue
-        # Accept numeric-like values (e.g., strings) for robustness; keep pixel coordinates as-is (no normalization)
-        try:
-            xmin = _as_float(bbox.get("xmin", bbox.get("x1")))
-            ymin = _as_float(bbox.get("ymin", bbox.get("y1")))
-            xmax = _as_float(bbox.get("xmax", bbox.get("x2")))
-            ymax = _as_float(bbox.get("ymax", bbox.get("y2")))
+    def __len__(self):  # type: ignore[override]
+        # Prefer num_rows attribute if available (datasets>=2.x), else len(), else 0
+        nr = getattr(self.ds, "num_rows", None)
+        if isinstance(nr, int):
+            return nr
+        try:  # pragma: no cover - defensive
+            return len(self.ds)  # type: ignore[arg-type]
         except Exception:
-            logger.warning(f"skip detection[{i}]: non-numeric bbox values")
-            continue
-        # If any are None after fallback, skip
-        if any(v is None for v in [xmin, ymin, xmax, ymax]):
-            logger.warning(f"skip detection[{i}]: missing bbox values")
-            continue
+            return 0
 
-        score_val = d.get("score", 0.0)
-        score = _clamp01(score_val)
 
-        normalized.append(
-            {
-                "label": label,
-                "score": score,
-                "bbox": {"xmin": xmin, "ymin": ymin, "xmax": xmax, "ymax": ymax},
-            }
+class OVDModel:
+    """Open-vocabulary detector wrapper.
+
+    Parameters
+    ----------
+    model_id : str | None
+        Hugging Face model id. Falls back to env default.
+    device : str
+        'auto' chooses CUDA→MPS→CPU; otherwise explicit device string.
+    threshold : float
+        Score threshold applied in post-processing.
+    """
+
+    def __init__(
+        self,
+        model_id: str | None = OVDMODEL,
+        device: str = "auto",
+        threshold: float = 0.3,
+    ) -> None:
+        if device == "auto":
+            if torch.cuda.is_available():  # pragma: no cover - device availability
+                self.device = "cuda"
+            elif (
+                hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+            ):  # pragma: no cover
+                self.device = "mps"
+            else:
+                self.device = "cpu"
+        else:
+            self.device = device
+        mid = model_id or OVDMODEL
+        self.processor = AutoProcessor.from_pretrained(mid)
+        self.model = AutoModelForZeroShotObjectDetection.from_pretrained(mid).to(
+            self.device
         )
+        self.model.eval()
+        logger.info(f"loaded detector model '{mid}' on device '{self.device}'")
+        self.threshold = threshold
 
-    return normalized
+    def __call__(self, image, prompts: List[str]) -> List[Dict[str, Any]]:
+        if not prompts:
+            return []
+        width, height = image.width, image.height
+        inputs = self.processor(images=image, text=[prompts], return_tensors="pt").to(
+            self.device
+        )
+        with torch.no_grad():  # pragma: no cover - inference
+            outputs = self.model(**inputs)
+        # Prefer grounded post-process when available
+        if hasattr(self.processor, "post_process_grounded_object_detection"):
+            processed = self.processor.post_process_grounded_object_detection(
+                outputs, threshold=self.threshold, target_sizes=[(height, width)]
+            )[0]
+        else:  # pragma: no cover - fallback path
+            processed = self.processor.post_process_object_detection(
+                outputs, threshold=self.threshold, target_sizes=[(height, width)]
+            )[0]
+        boxes = processed.get("boxes", [])
+        scores = processed.get("scores", [])
+        labels_out = processed.get("text_labels", [])
+        detections: List[Dict[str, Any]] = []
+        for box, score, lbl in zip(boxes, scores, labels_out):
+            try:
+                if hasattr(box, "tolist"):
+                    x1, y1, x2, y2 = [float(x) for x in box.tolist()]
+                else:
+                    vals = list(box)  # type: ignore[arg-type]
+                    if len(vals) != 4:
+                        continue
+                    x1, y1, x2, y2 = [float(x) for x in vals]
+                score_val = (
+                    float(score.item()) if hasattr(score, "item") else float(score)
+                )
+                label_str = lbl if isinstance(lbl, str) else str(lbl)
+                detections.append(
+                    {
+                        "label": label_str,
+                        "score": score_val,
+                        "bbox": {"xmin": x1, "ymin": y1, "xmax": x2, "ymax": y2},
+                    }
+                )
+            except Exception as e:  # pragma: no cover - skip malformed
+                logger.warning(
+                    f"skipping malformed detection box/score/label: {box}, {score}, {lbl}: {e}"
+                )
+                continue
+        return detections
+
+    # Legacy VLM detection JSON parser removed as part of cleanup.
