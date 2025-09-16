@@ -13,7 +13,7 @@ from object_harvest.reader import iter_images
 from object_harvest.vlm import describe_objects_ndjson
 from object_harvest.synthesis import synthesize_one_line
 from object_harvest.utils.clients import AIClient
-from object_harvest.detection import run_gdino_detection
+from object_harvest.detection import HFDataLoader, OVDModel, OVDMODEL
 from object_harvest.writer import JSONDirWriter
 from object_harvest.utils import (
     RateLimiter,
@@ -22,10 +22,6 @@ from object_harvest.utils import (
     update_tqdm_gpm,
 )
 from object_harvest.utils.paths import safe_stem
-from object_harvest.utils.detect_inputs import (
-    iter_jsonl_input,
-    iter_hf_dataset_input,
-)
 from object_harvest.utils.objects import (
     parse_objects_arg,
     load_describe_objects_map,
@@ -171,14 +167,19 @@ def _add_detect_parser(sub: argparse._SubParsersAction) -> None:
         help="Optional Hugging Face dataset id to read inputs from (e.g., user/dataset). Overrides --input when set.",
     )
     p.add_argument(
+        "--hf-dataset-split",
+        default="train",
+        help="Hugging Face dataset split to use (e.g., train, validation, test)",
+    )
+    p.add_argument(
         "--use-obj-desp",
         action="store_true",
         help="Use objects.description instead of objects.names when reading JSONL/HF datasets",
     )
     p.add_argument(
-        "--from-describe",
-        default=None,
-        help="Path to a describe run-* directory to read objects per image",
+        "--use-describe",
+        action="store_true",
+        help="If set, looks for a sibling describe run dir (--input/../describe_*) and uses the per-image NDJSON files as object lists",
     )
     p.add_argument(
         "--objects",
@@ -186,17 +187,8 @@ def _add_detect_parser(sub: argparse._SubParsersAction) -> None:
         help="Either a path to a text file (one object per line) or a comma-separated list of object names",
     )
     p.add_argument(
-        "--text",
-        default=None,
-        help="Free-form object description prompt for GroundingDINO (optional)",
-    )
-    p.add_argument(
         "--threshold", type=float, default=0.25, help="Score threshold for detections"
     )
-    p.add_argument(
-        "--max-workers", type=int, default=min(32, (os.cpu_count() or 4) * 5)
-    )
-    p.add_argument("--batch", type=int, default=0)
     p.add_argument(
         "--resume",
         action="store_true",
@@ -214,84 +206,32 @@ def _run_detect(args: argparse.Namespace) -> int:
     if writer_base != args.out and args.resume:
         logger.info(f"resuming into {writer_base}")
     writer = JSONDirWriter(writer_base)
-
-    existing_stems: set[str] = set()
-    if args.resume:
-        try:
-            for name in os.listdir(writer.run_dir):
-                if name.lower().endswith(".json"):
-                    existing_stems.add(os.path.splitext(name)[0])
-        except FileNotFoundError:
-            pass
-
-    # Build input items based on mode: HF dataset, JSONL, or images
-    items: list[dict]
+    
+    #TODO: Currently only huggingface datasets supported
+    #Check if hf-dataset is provided
     if getattr(args, "hf_dataset", None):
-        items = iter_hf_dataset_input(
-            args.hf_dataset, use_desc=bool(getattr(args, "use_obj_desp", False)), limit=(args.batch if args.batch > 0 else None)
-        )
-        logger.info(f"loaded {len(items)} items from HF dataset {args.hf_dataset}")
-        global_labels: list[str] | None = None
-        per_image_labels: dict[str, list[str]] = {}
-    elif str(args.input).lower().endswith(".jsonl"):
-        items = iter_jsonl_input(
-            args.input, use_desc=bool(getattr(args, "use_obj_desp", False)), limit=(args.batch if args.batch > 0 else None)
-        )
-        logger.info(f"loaded {len(items)} items from JSONL {args.input}")
-        global_labels = None
-        per_image_labels = {}
+        data_loader = HFDataLoader(args.hf_dataset, use_desc=bool(getattr(args, "use_obj_desp", False)), split = args.hf_dataset_split)
+        logger.info(f"loaded {len(data_loader)} items from HF dataset {args.hf_dataset}")
     else:
-        items = list(
-            iter_images(args.input, limit=args.batch if args.batch > 0 else None)
-        )
-        logger.info(f"found {len(items)} images")
-        # Objects source for plain images
-        global_labels = None
-        parsed_objs = parse_objects_arg(args.objects)
-        if parsed_objs:
-            global_labels = parsed_objs
+        logger.error("--detect currently only supports --hf-dataset mode")
+        return 2
 
-        per_image_labels = {}
-        if args.from_describe:
-            # if path points to parent folder, auto-pick latest run
-            src = resolve_run_dir_base(args.from_describe, True)
-            per_image_labels = load_describe_objects_map(src)
-
-    def labels_for_item(item: dict) -> list[str] | None:
-        # If labels are embedded in item (JSONL/HF dataset), prefer them
-        det = item.get("det_labels")
-        if isinstance(det, list) and det:
-            return [str(x) for x in det]
-        image_ref = item.get("path") or item.get("url") or "image"
-        stem = safe_stem(image_ref)
-        return per_image_labels.get(stem) or global_labels
-
-    work_items: list[tuple[dict, str]] = []
-    for item in items:
-        image_ref = item.get("path") or item.get("url") or "image"
-        stem = safe_stem(image_ref)
-        if args.resume and stem in existing_stems:
-            continue
-        work_items.append((item, image_ref))
-
-    with tqdm(total=len(work_items), desc="detect", unit="img") as pbar:
-        for item, image_ref in work_items:
-            labels = labels_for_item(item)
-            rec = run_gdino_detection(
-                item,
-                labels,
-                args.threshold,
-                args.hf_model,
-                args.text,
-            )
-            out = (
-                rec
-                if (isinstance(rec, dict) and "image" in rec and "detections" in rec)
-                else {"image": image_ref, "detections": rec or []}
-            )
-            safe = safe_stem(out.get("image") or "image")
-            writer.write(f"{safe}", out)
-            pbar.update(1)
+    # Initialize open-vocabulary detection model
+    hf_model_id = args.hf_model or OVDMODEL
+    ovd_model = OVDModel(hf_model_id, threshold=args.threshold)
+    
+    # Iterate over data_loader and perform detection
+    for item in tqdm(data_loader, total=len(data_loader), desc="detect", unit="img"):
+        rec = {
+            "id": item["id"],
+            "file_name": item["path"],
+            "detections": [],
+        }
+        if len(item["prompt"]) > 0:
+            detections = ovd_model(item["image"], item["prompt"])
+            rec["detections"] = detections
+        output_file_name = safe_stem(item["path"])
+        writer.write(output_file_name, rec)
 
     logger.info(f"done. detection outputs under {writer.run_dir}")
     return 0
