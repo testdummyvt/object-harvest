@@ -42,6 +42,13 @@ import argparse
 from pathlib import Path
 from typing import List, Dict, Any
 from datasets import Dataset
+import sys
+
+# Add object_harvest logging
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
+from object_harvest.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 def load_detection_json(file_path: Path) -> Dict[str, Any]:
@@ -100,13 +107,13 @@ def process_json_folder(folder_path: str) -> List[Dict[str, Any]]:
         raise FileNotFoundError(f"Folder not found: {folder_path}")
     
     converted_data = []
-    json_files = list(folder.glob("*.json"))
+    json_files = sorted(folder.glob("*.json"))
     
     if not json_files:
-        print(f"Warning: No JSON files found in {folder_path}")
+        logger.warning(f"No JSON files found in {folder_path}")
         return converted_data
     
-    print(f"Processing {len(json_files)} JSON files...")
+    logger.info(f"Processing {len(json_files)} JSON files...")
     
     for json_file in json_files:
         try:
@@ -114,10 +121,10 @@ def process_json_folder(folder_path: str) -> List[Dict[str, Any]]:
             converted = convert_detections_to_hf_format(data)
             converted_data.append(converted)
         except Exception as e:
-            print(f"Error processing {json_file}: {e}")
+            logger.error(f"Error processing {json_file}: {e}")
             continue
     
-    print(f"Successfully processed {len(converted_data)} files")
+    logger.info(f"Successfully processed {len(converted_data)} files")
     return converted_data
 
 
@@ -163,13 +170,13 @@ def save_dataset(dataset: Dataset, output_path: str, format_type: str = "arrow")
     
     if format_type == "arrow":
         dataset.save_to_disk(str(output_path_obj))
-        print(f"Dataset saved to {output_path_obj} in Arrow format")
+        logger.info(f"Dataset saved to {output_path_obj} in Arrow format")
     elif format_type == "json":
         dataset.to_json(str(output_path_obj))
-        print(f"Dataset saved to {output_path_obj} in JSON format")
+        logger.info(f"Dataset saved to {output_path_obj} in JSON format")
     elif format_type == "parquet":
         dataset.to_parquet(str(output_path_obj))
-        print(f"Dataset saved to {output_path_obj} in Parquet format")
+        logger.info(f"Dataset saved to {output_path_obj} in Parquet format")
     else:
         raise ValueError(f"Unsupported format: {format_type}")
 
@@ -185,19 +192,19 @@ def upload_to_huggingface(dataset: Dataset, repo_id: str, token = None, private:
         private: Whether to make the dataset private
     """
     try:
-        print(f"🚀 Uploading dataset to Hugging Face Hub: {repo_id}")
+        logger.info(f"Uploading dataset to Hugging Face Hub: {repo_id}")
         dataset.push_to_hub(
             repo_id=repo_id,
             token=token,
             private=private
         )
-        print(f"✅ Successfully uploaded dataset to: https://huggingface.co/datasets/{repo_id}")
+        logger.info(f"Successfully uploaded dataset to: https://huggingface.co/datasets/{repo_id}")
     except Exception as e:
-        print(f"❌ Failed to upload to Hugging Face Hub: {e}")
-        print("💡 Make sure you have:")
-        print("   1. Installed huggingface_hub: pip install huggingface_hub")
-        print("   2. Logged in: huggingface-cli login")
-        print("   3. Or provided a valid token with --hf-token")
+        logger.error(f"Failed to upload to Hugging Face Hub: {e}")
+        logger.info("Make sure you have:")
+        logger.info("   1. Installed huggingface_hub: pip install huggingface_hub")
+        logger.info("   2. Logged in: huggingface-cli login")
+        logger.info("   3. Or provided a valid token with --hf-token")
         raise
 
 
@@ -246,35 +253,35 @@ def main():
         converted_data = process_json_folder(args.input_folder)
         
         if not converted_data:
-            print("No data to process. Exiting.")
+            logger.warning("No data to process. Exiting.")
             return
         
         # Create HuggingFace dataset
         dataset = create_huggingface_dataset(converted_data)
         
-        print(f"\nDataset created with {len(dataset)} samples")
-        print(f"Dataset columns: {dataset.column_names}")
-        print(f"Dataset features: {dataset.features}")
+        logger.info(f"Dataset created with {len(dataset)} samples")
+        logger.info(f"Dataset columns: {dataset.column_names}")
+        logger.info(f"Dataset features: {dataset.features}")
         
         # Preview mode
         if args.preview:
-            print("\nPreview of first 3 samples:")
+            logger.info("Preview of first 3 samples:")
             preview_samples = dataset.select(range(min(3, len(dataset))))
             for i in range(len(preview_samples)):
                 sample = preview_samples[i]
-                print(f"\nSample {i + 1}:")
-                print(f"  ID: {sample['id']}")
-                print(f"  File: {sample['file_name']}")
-                print(f"  Objects: {len(sample['objects']['label'])} detections")
+                logger.info(f"Sample {i + 1}:")
+                logger.info(f"  ID: {sample['id']}")
+                logger.info(f"  File: {sample['file_name']}")
+                logger.info(f"  Objects: {len(sample['objects']['label'])} detections")
                 if sample['objects']['label']:
-                    print(f"  First detection: {sample['objects']['label'][0]} "
+                    logger.info(f"  First detection: {sample['objects']['label'][0]} "
                           f"(score: {sample['objects']['score'][0]:.3f})")
             return
         
         # Save dataset
         save_dataset(dataset, args.output_path, args.format)
         
-        print(f"\n✅ Successfully converted {len(converted_data)} JSON files to HuggingFace dataset!")
+        logger.info(f"Successfully converted {len(converted_data)} JSON files to HuggingFace dataset!")
         
         # Upload to Hugging Face Hub if requested
         if args.hf_repo_id:
@@ -286,7 +293,7 @@ def main():
             )
         
     except Exception as e:
-        print(f"❌ Error: {e}")
+        logger.error(f"Error: {e}")
         return 1
 
 
@@ -315,11 +322,11 @@ def test_conversion():
     example_data = create_example_data()
     converted = convert_detections_to_hf_format(example_data)
     
-    print("Original format:")
-    print(json.dumps(example_data, indent=2))
+    logger.info("Original format:")
+    logger.info(json.dumps(example_data, indent=2))
     
-    print("\nConverted to HuggingFace format:")
-    print(json.dumps(converted, indent=2))
+    logger.info("Converted to HuggingFace format:")
+    logger.info(json.dumps(converted, indent=2))
     
     # Verify the conversion
     assert converted['id'] == example_data['id']
@@ -329,10 +336,10 @@ def test_conversion():
     assert converted['objects']['score'] == [0.95, 0.88]
     assert converted['objects']['bbox'] == [[100.0, 50.0, 200.0, 300.0], [300.0, 200.0, 500.0, 400.0]]
     
-    print("\n✅ Test passed!")
+    logger.info("Test passed!")
 
 
 if __name__ == "__main__":
     # Uncomment the line below to run the test
     # test_conversion()
-    main()
+    sys.exit(main())
