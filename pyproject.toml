@@ -5,6 +5,7 @@ description = "Generate object detection labels using vision models."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "datasets>=4.1.1",
     "dotenv>=0.9.9",
     "openai>=1.101.0",
     "pillow>=11.3.0",
