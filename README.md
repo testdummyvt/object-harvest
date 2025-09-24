@@ -1,0 +1,117 @@
+# Object Harvest
+
+Object Harvest is a tool for generating and processing object-related data, including prompt generation using LLMs and image generation from prompts.
+
+## Features
+
+- **Prompt Generation (`prompt-gen`)**: Generate scene descriptions containing specified objects using OpenAI-compatible LLMs (e.g., via OpenRouter).
+- **Image Generation (`image-gen`)**: Generate images from NDJSON prompts (not yet implemented).
+- **Multi-threading**: Efficient parallel processing with configurable rate limiting.
+- **NDJSON Output**: Structured output for easy processing.
+
+## Installation
+
+1. Ensure you have Python ≥ 3.12 installed.
+2. Clone the repository and navigate to the project directory.
+3. Install dependencies using `uv`:
+
+   ```bash
+   uv venv
+   uv install --dev
+   ```
+
+## Setup
+
+### API Keys
+For LLM access, set your API key as an environment variable:
+
+```bash
+export OPENROUTER_API_KEY="your-api-key-here"
+```
+
+Or pass it via the `--api-key` CLI argument.
+
+## Usage
+
+### General Command Structure
+
+```bash
+uv run python -m obh.generate <task> [options]
+```
+
+Or using the installed script:
+
+```bash
+obh-generate <task> [options]
+```
+
+### Tasks
+
+#### Prompt Generation (`prompt-gen`)
+
+Generates scene descriptions containing the specified objects using an LLM.
+
+**Required Arguments:**
+- `--num-prompts`: Number of prompts to generate
+- `--output`: Path to output NDJSON file
+
+**Object Input (choose one):**
+- `--objects-file`: Text file with objects (one per line, format: `object — descriptor`)
+- `--objects-list`: Comma-separated list (format: `object — descriptor`)
+
+**Optional Arguments:**
+- `--rpm`: Requests per minute limit (default: 60)
+- `--model`: LLM model (default: `openai/gpt-4o`)
+- `--base-url`: API base URL (default: `https://openrouter.ai/api/v1`)
+- `--api-key`: API key (overrides env var)
+
+**Example:**
+
+```bash
+# Using objects list
+uv run python -m obh.generate prompt-gen \
+  --objects-list "apple — red, shiny; banana — yellow, curved" \
+  --num-prompts 5 \
+  --output prompts.ndjson
+
+# Using objects file
+echo "apple — red, shiny" > objects.txt
+echo "banana — yellow, curved" >> objects.txt
+uv run python -m obh.generate prompt-gen \
+  --objects-file objects.txt \
+  --num-prompts 10 \
+  --rpm 30 \
+  --output prompts.ndjson
+```
+
+**Output Format:**
+Each line in the NDJSON file is a JSON object with:
+- `describe`: The generated scene description
+- `objects`: Array of objects with their exact phrasing in the description
+
+#### Image Generation (`image-gen`)
+
+Generates images from NDJSON prompts using Transformers diffusion models.
+
+**Note:** This task is not yet implemented.
+
+**Planned Arguments:**
+- `--input`: Path to input NDJSON file from `prompt-gen`
+- `--output-dir`: Directory to save generated images
+
+## Development
+
+### Code Style
+- Use `uv run ruff check --fix .` to lint and format code.
+- Run `uv run pytest` for tests (add tests under `tests/`).
+
+### Project Structure
+- `obh/`: Main package
+  - `generate.py`: CLI entry point for generation tasks
+  - `utils/`: Shared utilities
+    - `llm_utils.py`: LLM-related helper functions
+- `tests/`: Unit tests
+
+## Contributing
+
+Follow the guidelines in `AGENTS.md` for code style, testing, and PR workflow.
