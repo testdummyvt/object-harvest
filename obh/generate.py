@@ -1,5 +1,8 @@
+from typing import Optional
+import random
 import argparse
 import json
+from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
@@ -61,6 +64,16 @@ def parse_args() -> argparse.Namespace:
         required=True,
         help="Output NDJSON file path",
     )
+    prompt_parser.add_argument(
+        "--min-objects",
+        type=int,
+        help="Minimum number of objects to randomly select per prompt (optional)",
+    )
+    prompt_parser.add_argument(
+        "--max-objects",
+        type=int,
+        help="Maximum number of objects to randomly select per prompt (optional)",
+    )
     add_common_llm_args(prompt_parser)
 
     # Image-gen subcommand (placeholder)
@@ -94,18 +107,36 @@ def prompt_gen_task(args: argparse.Namespace) -> int:
         print("Error: No objects provided. Use --objects-file or --objects-list.")
         return 1
 
+    # Validate min/max objects arguments
+    if args.min_objects is not None or args.max_objects is not None:
+        if args.min_objects is None or args.max_objects is None:
+            print("Error: Both --min-objects and --max-objects must be specified together.")
+            return 1
+        if args.min_objects > args.max_objects:
+            print("Error: --min-objects cannot be greater than --max-objects.")
+            return 1
+        if args.min_objects < 1 or args.max_objects < 1:
+            print("Error: --min-objects and --max-objects must be at least 1.")
+            return 1
+        if args.max_objects > len(objects):
+            print(f"Error: --max-objects cannot be greater than the number of available objects ({len(objects)}).")
+            return 1
+
     # Setup LLM client
     client = setup_llm_client(args.base_url, args.api_key)
-
-    # Prepare system prompt
-    objects_str = ", ".join(objects)
-    system_prompt = PROMPTGEN_SYS_PROMPT.format(objects=objects_str)
 
     # Rate limiting setup
     rpm = args.rpm
     interval = 60 / rpm  # seconds between requests
 
-    def generate_prompt(i: int) -> str:
+    def generate_prompt(i: int, objects: list[str], min_objects: Optional[int], max_objects: Optional[int]) -> str:
+        if min_objects is not None and max_objects is not None:
+            num = random.randint(min_objects, max_objects)
+            selected_objects = random.sample(objects, num)
+        else:
+            selected_objects = objects
+        objects_str = ", ".join(selected_objects)
+        system_prompt = PROMPTGEN_SYS_PROMPT.format(objects=objects_str)
         return rate_limited_call(
             client,
             model=args.model,
@@ -115,9 +146,9 @@ def prompt_gen_task(args: argparse.Namespace) -> int:
 
     # Multi-threaded generation
     with ThreadPoolExecutor(max_workers=min(rpm, args.num_prompts)) as executor:
-        futures = [executor.submit(generate_prompt, i) for i in range(args.num_prompts)]
+        futures = [executor.submit(generate_prompt, i, objects, args.min_objects, args.max_objects) for i in range(args.num_prompts)]
         results = []
-        for future in as_completed(futures):
+        for future in tqdm(as_completed(futures), total=len(futures)):
             try:
                 result = future.result()
                 results.append(result)
@@ -184,7 +215,7 @@ def prompt_enhance_task(args: argparse.Namespace) -> int:
     with ThreadPoolExecutor(max_workers=min(rpm, len(input_data))) as executor:
         futures = [executor.submit(enhance_prompt, entry) for entry in input_data]
         results = []
-        for future in as_completed(futures):
+        for future in tqdm(as_completed(futures), total=len(futures)):
             try:
                 result = future.result()
                 results.append(result)
