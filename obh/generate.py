@@ -1,3 +1,4 @@
+import os
 from typing import Optional, Dict, Any
 import random
 import argparse
@@ -137,7 +138,7 @@ def prompt_gen_task(args: argparse.Namespace) -> int:
     rpm = args.rpm
     interval = 60 / rpm  # seconds between requests
 
-    def generate_prompt(i: int, objects: list[str], min_objects: Optional[int], max_objects: Optional[int]) -> Dict[str, Any]:
+    def generate_prompt(_: int, objects: list[str], min_objects: Optional[int], max_objects: Optional[int]) -> Dict[str, Any]:
         if min_objects is not None and max_objects is not None:
             num = random.randint(min_objects, max_objects)
             selected_objects = random.sample(objects, num)
@@ -161,7 +162,7 @@ def prompt_gen_task(args: argparse.Namespace) -> int:
     total_attempted = 0
     total_failed = 0
     total_successful = 0
-    with ThreadPoolExecutor(max_workers=min(rpm, batch_size)) as executor:
+    with ThreadPoolExecutor(max_workers=min(rpm, batch_size, os.cpu_count())) as executor:
         for start in range(0, args.num_prompts, batch_size):
             batch_end = min(start + batch_size, args.num_prompts)
             batch_indices = range(start, batch_end)
@@ -242,7 +243,7 @@ def prompt_enhance_task(args: argparse.Namespace) -> int:
 
     batch_size = args.batch_size
     total_processed = 0
-    with ThreadPoolExecutor(max_workers=min(rpm, batch_size)) as executor:
+    with ThreadPoolExecutor(max_workers=min(rpm, batch_size, os.cpu_count())) as executor:
         for start in range(0, len(input_data), batch_size):
             batch = input_data[start:start + batch_size]
             futures = [executor.submit(enhance_prompt, entry) for entry in batch]

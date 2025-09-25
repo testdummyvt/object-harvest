@@ -4,6 +4,7 @@ import time
 from typing import List, Optional
 
 from openai import OpenAI
+from openai.types.chat import ChatCompletionMessageParam
 
 
 _last_call_time = 0.0
@@ -48,7 +49,7 @@ def setup_llm_client(base_url: str, api_key: Optional[str]) -> OpenAI:
 def rate_limited_call(
     client: OpenAI,
     model: str,
-    messages: List[dict[str, str]],
+    messages: List[ChatCompletionMessageParam],
     interval: float,
 ) -> str:
     """Make a rate-limited LLM call.
@@ -72,7 +73,7 @@ def rate_limited_call(
 
     response = client.chat.completions.create(
         model=model,
-        messages=messages,  # type: ignore
+        messages=messages,
         temperature=0.7,  # For creativity
     )
     content = response.choices[0].message.content
