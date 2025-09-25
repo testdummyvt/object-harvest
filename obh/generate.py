@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from obh.utils import load_objects, setup_llm_client, rate_limited_call
 from obh.utils.prompts import PROMPTGEN_SYS_PROMPT, QWEN_T2I_SYS_PROMPT, MAGIC_PROMPT_EN
-from obh.utils.validation import validate_and_clean_prompt_gen_response
+from obh.utils.validation import validate_and_clean_prompt_gen_response, restructure_objects
 from obh.utils.qwen_image import QwenImage, ASPECT_RATIO_SIZES, MAX_SEED
 
 
@@ -163,7 +163,9 @@ def prompt_gen_task(args: argparse.Namespace) -> int:
             messages=[{"role": "system", "content": system_prompt}],
             interval=interval,
         )
-        return validate_and_clean_prompt_gen_response(response)
+        result = validate_and_clean_prompt_gen_response(response)
+        result = restructure_objects(result)
+        return result
 
     # Clear output file
     with open(args.output, "w") as f:

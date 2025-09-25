@@ -50,3 +50,21 @@ def validate_and_clean_prompt_gen_response(response: str) -> Dict[str, Any]:
             raise ValueError(f"objects[{i}] key or value is not a string")
 
     return data
+
+
+def restructure_objects(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Restructure the 'objects' key in the prompt-gen response data.
+
+    Converts from list of dicts to dict with 'names' and 'descriptors' lists.
+
+    Args:
+        data: The validated response dict.
+
+    Returns:
+        The modified data dict.
+    """
+    objects_list = data["objects"]
+    names = [list(obj.keys())[0] for obj in objects_list]
+    descriptors = [list(obj.values())[0] for obj in objects_list]
+    data["objects"] = {"names": names, "descriptors": descriptors}
+    return data
