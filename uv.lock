@@ -549,7 +549,7 @@ dev = [
     { name = "pytest" },
     { name = "ruff" },
 ]
-diffusers = [
+torch = [
     { name = "diffusers" },
     { name = "torch" },
     { name = "transformers" },
@@ -557,16 +557,16 @@ diffusers = [
 
 [package.metadata]
 requires-dist = [
-    { name = "diffusers", marker = "extra == 'diffusers'", git = "https://github.com/huggingface/diffusers.git" },
+    { name = "diffusers", marker = "extra == 'torch'", git = "https://github.com/huggingface/diffusers.git" },
     { name = "openai", specifier = ">=1.109.1" },
     { name = "pillow", specifier = ">=11.3.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6.0" },
-    { name = "torch", marker = "extra == 'diffusers'", specifier = "==2.8" },
+    { name = "torch", marker = "extra == 'torch'", specifier = "==2.8" },
     { name = "tqdm", specifier = ">=4.67.1" },
-    { name = "transformers", marker = "extra == 'diffusers'", specifier = ">=4.56.2" },
+    { name = "transformers", marker = "extra == 'torch'", specifier = ">=4.56.2" },
 ]
-provides-extras = ["dev", "diffusers"]
+provides-extras = ["dev", "torch"]
 
 [[package]]
 name = "openai"
