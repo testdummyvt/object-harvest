@@ -145,28 +145,22 @@ def prompt_gen_task(args: argparse.Namespace) -> int:
             selected_objects = objects
         objects_str = ", ".join(selected_objects)
         system_prompt = PROMPTGEN_SYS_PROMPT.format(objects=objects_str)
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                response = rate_limited_call(
-                    client,
-                    model=args.model,
-                    messages=[{"role": "system", "content": system_prompt}],
-                    interval=interval,
-                )
-                return validate_and_clean_prompt_gen_response(response)
-            except ValueError as e:
-                if attempt == max_retries - 1:
-                    raise
-                print(f"Validation failed for prompt {i}, attempt {attempt + 1}: {e}. Retrying...")
-        raise ValueError("Failed to generate valid prompt after retries")
+        response = rate_limited_call(
+            client,
+            model=args.model,
+            messages=[{"role": "system", "content": system_prompt}],
+            interval=interval,
+        )
+        return validate_and_clean_prompt_gen_response(response)
 
     # Clear output file
     with open(args.output, "w") as f:
         pass
 
     batch_size = args.batch_size
-    total_processed = 0
+    total_attempted = 0
+    total_failed = 0
+    total_successful = 0
     with ThreadPoolExecutor(max_workers=min(rpm, batch_size)) as executor:
         for start in range(0, args.num_prompts, batch_size):
             batch_end = min(start + batch_size, args.num_prompts)
@@ -174,18 +168,24 @@ def prompt_gen_task(args: argparse.Namespace) -> int:
             futures = [executor.submit(generate_prompt, i, objects, args.min_objects, args.max_objects) for i in batch_indices]
             batch_results = []
             for future in tqdm(as_completed(futures), total=len(futures), desc=f"Batch {start//batch_size + 1}"):
+                total_attempted += 1
                 try:
                     result = future.result()
                     batch_results.append(result)
+                    total_successful += 1
                 except Exception as e:
                     print(f"Error in prompt generation: {e}")
+                    total_failed += 1
             # Append batch results to file
             with open(args.output, "a") as f:
                 for result in batch_results:
                     f.write(json.dumps(result) + "\n")
-            total_processed += len(batch_results)
 
-    print(f"Generated {total_processed} prompts to {args.output}")
+    print(f"Generated {total_successful} prompts to {args.output}")
+    print("Prompt generation summary:")
+    print(f"  Total attempted: {total_attempted}")
+    print(f"  Successful: {total_successful}")
+    print(f"  Failed: {total_failed}")
     return 0
 
 
