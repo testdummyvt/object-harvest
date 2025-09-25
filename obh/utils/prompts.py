@@ -4,10 +4,10 @@ PROMPTGEN_SYS_PROMPT = (
     "Avoid meta phrases like 'in this image' or 'this picture shows'.\n\n"
     "Then output STRICT JSON with exactly two keys and valid JSON syntax (no extra text outside the JSON):\n\n"
     "{{\n"
-    '  "describe": "<the one-line description>",\n'
+    '  "describe": "<the one-line caption>",\n'
     '  "objects": [\n'
-    '    {{"<object_1>": "<object_1>-<object_1_description>"}},\n'
-    '    {{"<object_2>": "<object_2>-<object_2_description>"}}\n'
+    '    {{"<object_1>": "<object_1> - <object_1_description>"}},\n'
+    '    {{"<object_2>": "<object_2> - <object_2_description>"}}\n'
     "  ]\n"
     "}}\n\n"
     "Rules:\n"
