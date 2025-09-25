@@ -39,7 +39,7 @@ def add_common_llm_args(parser: argparse.ArgumentParser) -> None:
         "--batch-size",
         type=int,
         default=100,
-        help="Batch size for processing (default: 10)",
+        help="Batch size for processing (default: 100)",
     )
 
 
