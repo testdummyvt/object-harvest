@@ -33,6 +33,12 @@ def add_common_llm_args(parser: argparse.ArgumentParser) -> None:
         type=str,
         help="API key (default: from OPENROUTER_API_KEY env var)",
     )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=100,
+        help="Batch size for processing (default: 10)",
+    )
 
 
 
@@ -144,23 +150,31 @@ def prompt_gen_task(args: argparse.Namespace) -> int:
             interval=interval,
         )
 
-    # Multi-threaded generation
-    with ThreadPoolExecutor(max_workers=min(rpm, args.num_prompts)) as executor:
-        futures = [executor.submit(generate_prompt, i, objects, args.min_objects, args.max_objects) for i in range(args.num_prompts)]
-        results = []
-        for future in tqdm(as_completed(futures), total=len(futures)):
-            try:
-                result = future.result()
-                results.append(result)
-            except Exception as e:
-                print(f"Error in prompt generation: {e}")
-
-    # Write to NDJSON
+    # Clear output file
     with open(args.output, "w") as f:
-        for result in results:
-            f.write(result + "\n")
+        pass
 
-    print(f"Generated {len(results)} prompts to {args.output}")
+    batch_size = args.batch_size
+    total_processed = 0
+    with ThreadPoolExecutor(max_workers=min(rpm, batch_size)) as executor:
+        for start in range(0, args.num_prompts, batch_size):
+            batch_end = min(start + batch_size, args.num_prompts)
+            batch_indices = range(start, batch_end)
+            futures = [executor.submit(generate_prompt, i, objects, args.min_objects, args.max_objects) for i in batch_indices]
+            batch_results = []
+            for future in tqdm(as_completed(futures), total=len(futures), desc=f"Batch {start//batch_size + 1}"):
+                try:
+                    result = future.result()
+                    batch_results.append(result)
+                except Exception as e:
+                    print(f"Error in prompt generation: {e}")
+            # Append batch results to file
+            with open(args.output, "a") as f:
+                for result in batch_results:
+                    f.write(result + "\n")
+            total_processed += len(batch_results)
+
+    print(f"Generated {total_processed} prompts to {args.output}")
     return 0
 
 
@@ -211,23 +225,30 @@ def prompt_enhance_task(args: argparse.Namespace) -> int:
         new_entry["prompt"] = enhanced
         return new_entry
 
-    # Multi-threaded enhancement
-    with ThreadPoolExecutor(max_workers=min(rpm, len(input_data))) as executor:
-        futures = [executor.submit(enhance_prompt, entry) for entry in input_data]
-        results = []
-        for future in tqdm(as_completed(futures), total=len(futures)):
-            try:
-                result = future.result()
-                results.append(result)
-            except Exception as e:
-                print(f"Error in prompt enhancement: {e}")
-
-    # Write to output NDJSON file
+    # Clear output file
     with open(args.output, "w") as f:
-        for result in results:
-            f.write(json.dumps(result) + "\\n")
+        pass
 
-    print(f"Enhanced {len(results)} prompts to {args.output}")
+    batch_size = args.batch_size
+    total_processed = 0
+    with ThreadPoolExecutor(max_workers=min(rpm, batch_size)) as executor:
+        for start in range(0, len(input_data), batch_size):
+            batch = input_data[start:start + batch_size]
+            futures = [executor.submit(enhance_prompt, entry) for entry in batch]
+            batch_results = []
+            for future in tqdm(as_completed(futures), total=len(futures), desc=f"Batch {start//batch_size + 1}"):
+                try:
+                    result = future.result()
+                    batch_results.append(result)
+                except Exception as e:
+                    print(f"Error in prompt enhancement: {e}")
+            # Append batch results to file
+            with open(args.output, "a") as f:
+                for result in batch_results:
+                    f.write(json.dumps(result) + "\n")
+            total_processed += len(batch_results)
+
+    print(f"Enhanced {total_processed} prompts to {args.output}")
     return 0
 
 
