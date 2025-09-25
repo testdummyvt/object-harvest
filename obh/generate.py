@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Dict, Any
 import random
 import argparse
 import json
@@ -8,6 +8,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from obh.utils import load_objects, setup_llm_client, rate_limited_call
 from obh.utils.prompts import PROMPTGEN_SYS_PROMPT, QWEN_T2I_SYS_PROMPT, MAGIC_PROMPT_EN
+from obh.utils.validation import validate_and_clean_prompt_gen_response
+
 
 def add_common_llm_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
@@ -135,7 +137,7 @@ def prompt_gen_task(args: argparse.Namespace) -> int:
     rpm = args.rpm
     interval = 60 / rpm  # seconds between requests
 
-    def generate_prompt(i: int, objects: list[str], min_objects: Optional[int], max_objects: Optional[int]) -> str:
+    def generate_prompt(i: int, objects: list[str], min_objects: Optional[int], max_objects: Optional[int]) -> Dict[str, Any]:
         if min_objects is not None and max_objects is not None:
             num = random.randint(min_objects, max_objects)
             selected_objects = random.sample(objects, num)
@@ -143,12 +145,21 @@ def prompt_gen_task(args: argparse.Namespace) -> int:
             selected_objects = objects
         objects_str = ", ".join(selected_objects)
         system_prompt = PROMPTGEN_SYS_PROMPT.format(objects=objects_str)
-        return rate_limited_call(
-            client,
-            model=args.model,
-            messages=[{"role": "system", "content": system_prompt}],
-            interval=interval,
-        )
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = rate_limited_call(
+                    client,
+                    model=args.model,
+                    messages=[{"role": "system", "content": system_prompt}],
+                    interval=interval,
+                )
+                return validate_and_clean_prompt_gen_response(response)
+            except ValueError as e:
+                if attempt == max_retries - 1:
+                    raise
+                print(f"Validation failed for prompt {i}, attempt {attempt + 1}: {e}. Retrying...")
+        raise ValueError("Failed to generate valid prompt after retries")
 
     # Clear output file
     with open(args.output, "w") as f:
@@ -171,7 +182,7 @@ def prompt_gen_task(args: argparse.Namespace) -> int:
             # Append batch results to file
             with open(args.output, "a") as f:
                 for result in batch_results:
-                    f.write(result + "\n")
+                    f.write(json.dumps(result) + "\n")
             total_processed += len(batch_results)
 
     print(f"Generated {total_processed} prompts to {args.output}")
