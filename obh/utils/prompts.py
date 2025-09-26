@@ -4,16 +4,17 @@ PROMPTGEN_SYS_PROMPT = (
     "Avoid meta phrases like 'in this image' or 'this picture shows'.\n\n"
     "Then output STRICT JSON with exactly two keys and valid JSON syntax (no extra text outside the JSON):\n\n"
     "{{\n"
-    '  "describe": "<the one-line description>",\n'
+    '  "describe": "<the one-line caption>",\n'
     '  "objects": [\n'
-    '    {{"<object_1>": "<object_1>-<object_1_description>"}},\n'
-    '    {{"<object_2>": "<object_2>-<object_2_description>"}}\n'
+    '    {{"<object_1>": "<object_1> - <object_1_description>"}},\n'
+    '    {{"<object_2>": "<object_2> - <object_2_description>"}}\n'
     "  ]\n"
     "}}\n\n"
     "Rules:\n"
     '- Use the exact object names (the part before the "—") from the provided list as JSON keys.\n'
     "- The object values in the JSON must match exactly how each object (including its short visual descriptor) appears in the main description.\n"
     "- Do not add or remove objects; include every provided object exactly once.\n"
+    "- If a person is among the objects, also include: their actions or poses, gender, age, and ethnicity in the caption.\n"
     '- If a person is present among the objects, explicitly mention the type of clothing that person is wearing (brief, descriptive phrase) and, if possible, name any accessories they are wearing (e.g., "linen shirt, cuffed jeans; leather satchel, gold hoop earrings"). Clothing and accessories must appear naturally within the one-line description and be reflected exactly in the corresponding object value in the JSON.\n'
     "- Keep object descriptions consistent with the wording in the main description.\n"
     "- *Output JSON only (no backticks, no explanations, no extra characters).*"

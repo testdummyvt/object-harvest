@@ -3,13 +3,15 @@ from typing import Optional, Dict, Any
 import random
 import argparse
 import json
+import uuid
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 from obh.utils import load_objects, setup_llm_client, rate_limited_call
 from obh.utils.prompts import PROMPTGEN_SYS_PROMPT, QWEN_T2I_SYS_PROMPT, MAGIC_PROMPT_EN
-from obh.utils.validation import validate_and_clean_prompt_gen_response
+from obh.utils.validation import validate_and_clean_prompt_gen_response, restructure_objects
+from obh.utils.qwen_image import QwenImage, ASPECT_RATIO_SIZES, MAX_SEED
 
 
 def add_common_llm_args(parser: argparse.ArgumentParser) -> None:
@@ -85,10 +87,19 @@ def parse_args() -> argparse.Namespace:
     )
     add_common_llm_args(prompt_parser)
 
-    # Image-gen subcommand (placeholder)
-    image_parser = subparsers.add_parser("image-gen", help="Generate images (not implemented)")
-    image_parser.add_argument("--input", type=str, help="Input NDJSON file")
-    add_common_llm_args(image_parser)
+    # Image-gen subcommand
+    image_parser = subparsers.add_parser("image-gen", help="Generate images using Qwen-Image")
+    image_parser.add_argument("--input", type=str, required=True, help="Input NDJSON file")
+    image_parser.add_argument("--output", type=str, required=True, help="Output directory to save generated images and metadata")
+    image_parser.add_argument("--model-path", type=str, default="Qwen/Qwen-Image", help="Hugging Face model path (default: Qwen/Qwen-Image)")
+    image_parser.add_argument("--input-prompt-field", type=str, default="prompt", help="Field in input NDJSON to use as prompt (default: prompt)")
+    image_parser.add_argument("--aspect-ratio", type=str, help="Aspect ratio from ASPECT_RATIO_SIZES (optional)")
+    image_parser.add_argument("--num-inference-steps", type=int, default=8, help="Number of inference steps (default: 8)")
+    image_parser.add_argument("--steps", type=int, default=1, help="Number of images to generate per prompt (default: 1)")
+    image_parser.add_argument("--seed", type=int, default=0, help="Seed for reproducibility (default: 0)")
+    image_parser.add_argument("--randomize-seed", action="store_false", dest="randomize_seed", default=True, help="Randomize seed (default: True). Use --randomize-seed to disable randomization.")
+    image_parser.add_argument("--guidance-scale", type=float, default=1.0, help="Guidance scale (default: 1.0)")
+    image_parser.add_argument("--format", type=str, choices=["png", "jpeg"], default="jpeg", help="Image format (default: jpeg)")
 
     # Prompt-enhance subcommand
     enhance_parser = subparsers.add_parser("prompt-enhance", help="Enhance prompts using Qwen T2I prompt optimizer")
@@ -152,7 +163,9 @@ def prompt_gen_task(args: argparse.Namespace) -> int:
             messages=[{"role": "system", "content": system_prompt}],
             interval=interval,
         )
-        return validate_and_clean_prompt_gen_response(response)
+        result = validate_and_clean_prompt_gen_response(response)
+        result = restructure_objects(result)
+        return result
 
     # Clear output file
     with open(args.output, "w") as f:
@@ -191,7 +204,95 @@ def prompt_gen_task(args: argparse.Namespace) -> int:
 
 
 def image_gen_task(args: argparse.Namespace) -> int:
-    raise NotImplementedError("Image generation not yet implemented")
+    # Validate aspect_ratio if provided
+    if args.aspect_ratio and args.aspect_ratio not in ASPECT_RATIO_SIZES:
+        print(f"Error: Invalid aspect ratio '{args.aspect_ratio}'. Valid options: {list(ASPECT_RATIO_SIZES.keys())}")
+        return 1
+
+    # Create output directories
+    images_dir = os.path.join(args.output, "images")
+    os.makedirs(images_dir, exist_ok=True)
+
+    # Initialize QwenImage
+    generator = QwenImage(model_path=args.model_path)
+
+    # Read input NDJSON
+    input_data = []
+    try:
+        with open(args.input, "r") as f:
+            for line in f:
+                if line.strip():
+                    input_data.append(json.loads(line.strip()))
+    except FileNotFoundError:
+        print(f"Error: Input file '{args.input}' not found.")
+        return 1
+    except json.JSONDecodeError as e:
+        print(f"Error: Invalid JSON in input file: {e}")
+        return 1
+
+    # Prepare metadata file
+    metadata_path = os.path.join(args.output, "metadata.ndjson")
+    with open(metadata_path, "w") as f:
+        pass  # clear
+
+    total_images = 0
+    for idx, entry in enumerate(tqdm(input_data, desc="Processing prompts")):
+        # Get prompt
+        prompt = entry.get(args.input_prompt_field)
+        if prompt is None:
+            prompt = entry.get("describe")
+        if prompt is None:
+            print(f"Warning: No '{args.input_prompt_field}' or 'describe' field in entry {idx}, skipping.")
+            continue
+
+        # Generate steps images
+        for step in range(args.steps):
+            if args.randomize_seed:
+                seed = random.randint(0, MAX_SEED)
+                print(f"Using random seed {seed} for entry {idx}, step {step}")
+            else:
+                seed = args.seed + step  # vary per step for reproducibility
+
+            # Generate image
+            image = generator(
+                prompt=prompt,
+                aspect_ratio=args.aspect_ratio,
+                num_inference_steps=args.num_inference_steps,
+                seed=seed,
+                randomize_seed=False,  # we handle seed here
+                guidance_scale=args.guidance_scale,
+            )
+
+            # Generate uuid
+            img_uuid = str(uuid.uuid4())
+
+            # Filename
+            filename = f"{idx}_{img_uuid}.{args.format}"
+
+            img_path = os.path.join(images_dir, filename)
+
+            # Save image
+            image.save(img_path, args.format.upper())
+
+            # Metadata entry
+            meta_entry = {
+                "image_path": f"images/{filename}",
+            }
+            if "prompt" in entry:
+                meta_entry["prompt"] = entry["prompt"]
+            if "describe" in entry:
+                meta_entry["describe"] = entry["describe"]
+            if "objects" in entry:
+                meta_entry["objects"] = entry["objects"]
+
+            # Append to metadata
+            with open(metadata_path, "a") as f:
+                f.write(json.dumps(meta_entry) + "\n")
+
+            total_images += 1
+
+    print(f"Generated {total_images} images to {args.output}")
+    return 0
 
 
 def prompt_enhance_task(args: argparse.Namespace) -> int:

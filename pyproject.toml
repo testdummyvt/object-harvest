@@ -15,9 +15,17 @@ dev = [
     "pytest>=8.0.0",
     "ruff>=0.6.0",
 ]
+torch = [
+    "diffusers",
+    "torch==2.8",
+    "transformers>=4.56.2",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.uv.sources]
+diffusers = { git = "https://github.com/huggingface/diffusers.git" }
 
 [project.scripts]
 obh-detect = "obh.detect:main"
