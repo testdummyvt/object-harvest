@@ -95,7 +95,7 @@ def parse_args() -> argparse.Namespace:
     image_parser.add_argument("--input-prompt-field", type=str, default="prompt", help="Field in input NDJSON to use as prompt (default: prompt)")
     image_parser.add_argument("--aspect-ratio", type=str, help="Aspect ratio from ASPECT_RATIO_SIZES (optional)")
     image_parser.add_argument("--num-inference-steps", type=int, default=8, help="Number of inference steps (default: 8)")
-    image_parser.add_argument("--steps", type=int, default=8, help="Number of images to generate per prompt (default: 8)")
+    image_parser.add_argument("--steps", type=int, default=1, help="Number of images to generate per prompt (default: 1)")
     image_parser.add_argument("--seed", type=int, default=0, help="Seed for reproducibility (default: 0)")
     image_parser.add_argument("--randomize-seed", action="store_false", dest="randomize_seed", default=True, help="Randomize seed (default: True). Use --randomize-seed to disable randomization.")
     image_parser.add_argument("--guidance-scale", type=float, default=1.0, help="Guidance scale (default: 1.0)")
@@ -249,6 +249,7 @@ def image_gen_task(args: argparse.Namespace) -> int:
         for step in range(args.steps):
             if args.randomize_seed:
                 seed = random.randint(0, MAX_SEED)
+                print(f"Using random seed {seed} for entry {idx}, step {step}")
             else:
                 seed = args.seed + step  # vary per step for reproducibility
 
