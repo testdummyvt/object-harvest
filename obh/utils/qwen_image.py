@@ -134,8 +134,8 @@ class QwenImage:
 
         if randomize_seed:
             seed = random.randint(0, MAX_SEED)
-        # Create a CUDA RNG for deterministic sampling when a seed is set.
-        generator = torch.Generator(device="cuda").manual_seed(seed)
+        # Create a RNG for deterministic sampling on the same device as the pipeline.
+        generator = torch.Generator(device=self.pipe.device).manual_seed(seed)
 
         image = self.pipe(
             prompt=prompt,

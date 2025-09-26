@@ -280,8 +280,8 @@ def image_gen_task(args: argparse.Namespace) -> int:
             }
             if "prompt" in entry:
                 meta_entry["prompt"] = entry["prompt"]
-            if "description" in entry:
-                meta_entry["description"] = entry["description"]
+            if "describe" in entry:
+                meta_entry["describe"] = entry["describe"]
             if "objects" in entry:
                 meta_entry["objects"] = entry["objects"]
 
