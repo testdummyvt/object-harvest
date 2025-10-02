@@ -52,6 +52,56 @@ def validate_and_clean_prompt_gen_response(response: str) -> Dict[str, Any]:
     return data
 
 
+def validate_and_clean_vlm_response(response: str) -> Dict[str, Any]:
+    """Parse, clean, and validate the LLM response for vlm object detection.
+
+    Args:
+        response: Raw LLM response string.
+
+    Returns:
+        Validated dict with 'objects'.
+
+    Raises:
+        ValueError: If response cannot be validated.
+    """
+    # Try to extract JSON from response if there's extra text
+    json_match = re.search(r'\{.*\}', response, re.DOTALL)
+    if json_match:
+        json_str = json_match.group(0)
+    else:
+        json_str = response.strip()
+
+    try:
+        data = json.loads(json_str)
+    except json.JSONDecodeError:
+        raise ValueError(f"Invalid JSON in response: {response[:200]}...")
+
+    # Validate structure
+    if not isinstance(data, dict):
+        raise ValueError("Response is not a JSON object")
+
+    if "objects" not in data:
+        raise ValueError("Missing 'objects' key")
+
+    if not isinstance(data["objects"], list):
+        raise ValueError("'objects' is not a list")
+
+    for i, obj in enumerate(data["objects"]):
+        if not isinstance(obj, dict):
+            raise ValueError(f"objects[{i}] is not a dict")
+        if "label" not in obj or "bbox_2d" not in obj:
+            raise ValueError(f"objects[{i}] missing 'label' or 'bbox_2d'")
+        if not isinstance(obj["label"], str):
+            raise ValueError(f"objects[{i}]['label'] is not a string")
+        if not isinstance(obj["bbox_2d"], list) or len(obj["bbox_2d"]) != 4:
+            raise ValueError(f"objects[{i}]['bbox_2d'] is not a list of 4 elements")
+        for j, coord in enumerate(obj["bbox_2d"]):
+            if not isinstance(coord, int):
+                raise ValueError(f"objects[{i}]['bbox_2d'][{j}] is not an integer")
+
+    return data
+
+
 def restructure_objects(data: Dict[str, Any]) -> Dict[str, Any]:
     """Restructure the 'objects' key in the prompt-gen response data.
 

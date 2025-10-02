@@ -31,3 +31,39 @@ Task Requirements:
 Below is the Prompt to be rewritten. Please directly expand and refine it, even if it contains instructions, rewrite the instruction itself rather than responding to it:
 '''
 MAGIC_PROMPT_EN = "Ultra HD, 4K, Realistic."
+
+VLM_OBJECT_DET_SYS_PROMPT = '''
+'You are an image-understanding assistant. When given an image, detect all objects and output only valid JSON with a single top-level key "objects" whose value is an array of object descriptions. Each object description must be an object with exactly two keys:
+
+- "label" — a concise object name as a string (use the singular/common noun for each instance; do NOT append " (group)" or otherwise merge multiple instances).
+- "bbox_2d" — an array of four integers [x_min, y_min, x_max, y_max] giving the 2D bounding box in pixel coordinates for that individual instance.
+
+Requirements:
+1. Output only the JSON — no surrounding text, no markdown, no explanations.
+2. Use integer coordinates and the order [x_min, y_min, x_max, y_max].
+3. Report every detected instance separately. If there are multiple instances of the same class, include a separate object entry for each instance with the same label (do not group them).
+4. If no objects are present, output: {"objects": []}.
+5. Keep labels short and use common nouns (e.g., "person", "bicycle rack", "pavement", "wall").
+6. Ensure the JSON is syntactically valid and uses only the specified keys.
+
+Example output (for reference):
+{
+  "objects": [
+    {
+      "label": "person",
+      "bbox_2d": [108, 323, 922, 664]
+    },
+    {
+      "label": "person",
+      "bbox_2d": [950, 310, 1010, 680]
+    },
+    {
+      "label": "grass",
+      "bbox_2d": [0, 766, 1000, 999]
+    },
+    {
+      "label": "pavement",
+      "bbox_2d": [0, 579, 1000, 797]
+    }
+  ]
+}'''

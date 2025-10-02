@@ -1,3 +1,4 @@
+import base64
 import os
 import threading
 import time
@@ -28,6 +29,19 @@ def load_objects(objects_file: Optional[str], objects_list: Optional[str]) -> Li
     if objects_list:
         objects.extend(obj.strip() for obj in objects_list.split(",") if obj.strip())
     return objects
+
+
+def encode_image_to_base64(image_path: str) -> str:
+    """Encode an image file to base64 string.
+
+    Args:
+        image_path: Path to the image file.
+
+    Returns:
+        Base64 encoded string of the image.
+    """
+    with open(image_path, "rb") as f:
+        return base64.b64encode(f.read()).decode('utf-8')
 
 
 def setup_llm_client(base_url: str, api_key: Optional[str]) -> OpenAI:
