@@ -98,7 +98,9 @@ def vlm_task(args: argparse.Namespace) -> int:
         )
         try:
             data = validate_and_clean_vlm_response(response)
-            return {"objects": data["objects"], "file_path": img_path}
+            labels = [obj["label"] for obj in data["objects"]]
+            bboxes = [obj["bbox_2d"] for obj in data["objects"]]
+            return {"objects": {"label": labels, "bbox": bboxes}, "file_path": img_path}
         except ValueError as e:
             print(f"Error validating response for {img_path}: {e}")
             return None
