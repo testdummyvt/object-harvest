@@ -89,9 +89,9 @@ def validate_and_clean_vlm_response(response: str) -> Dict[str, Any]:
     for i, obj in enumerate(data["objects"]):
         if not isinstance(obj, dict):
             raise ValueError(f"objects[{i}] is not a dict")
-        if "label" not in obj or "bbox_2d" not in obj:
+        if "labels" not in obj or "bbox_2d" not in obj:
             raise ValueError(f"objects[{i}] missing 'label' or 'bbox_2d'")
-        if not isinstance(obj["label"], str):
+        if not isinstance(obj["labels"], str):
             raise ValueError(f"objects[{i}]['label'] is not a string")
         if not isinstance(obj["bbox_2d"], list) or len(obj["bbox_2d"]) != 4:
             raise ValueError(f"objects[{i}]['bbox_2d'] is not a list of 4 elements")
