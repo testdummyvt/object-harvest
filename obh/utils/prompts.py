@@ -35,7 +35,7 @@ MAGIC_PROMPT_EN = "Ultra HD, 4K, Realistic."
 VLM_OBJECT_DET_SYS_PROMPT = '''
 'You are an image-understanding assistant. When given an image, detect all objects and output only valid JSON with a single top-level key "objects" whose value is an array of object descriptions. Each object description must be an object with exactly two keys:
 
-- "label" — a concise object name as a string (use the singular/common noun for each instance; do NOT append " (group)" or otherwise merge multiple instances).
+- "labels" — a concise object name as a string (use the singular/common noun for each instance; do NOT append " (group)" or otherwise merge multiple instances).
 - "bbox_2d" — an array of four integers [x_min, y_min, x_max, y_max] giving the 2D bounding box in pixel coordinates for that individual instance.
 
 Requirements:
@@ -50,19 +50,19 @@ Example output (for reference):
 {
   "objects": [
     {
-      "label": "person",
+      "labels": "person",
       "bbox_2d": [108, 323, 922, 664]
     },
     {
-      "label": "person",
+      "labels": "person",
       "bbox_2d": [950, 310, 1010, 680]
     },
     {
-      "label": "grass",
+      "labels": "grass",
       "bbox_2d": [0, 766, 1000, 999]
     },
     {
-      "label": "pavement",
+      "labels": "pavement",
       "bbox_2d": [0, 579, 1000, 797]
     }
   ]
