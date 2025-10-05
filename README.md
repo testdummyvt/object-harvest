@@ -223,7 +223,7 @@ uv run python -m obh.detect vlm \
 
 **Output Format:**
 Each line in the JSONL file is a JSON object with:
-- `objects`: Object with `label` (array of object names) and `bbox` (array of bounding boxes as [x_min, y_min, x_max, y_max])
+- `objects`: Object with `labels` (array of object names) and `bbox` (array of bounding boxes as [x_min, y_min, x_max, y_max])
 - `file_path`: Path to the processed image file
 
 **Processing Details:**
