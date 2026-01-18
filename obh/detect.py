@@ -1,4 +1,4 @@
-import argparse
+import click
 import glob
 import json
 import os
@@ -12,62 +12,80 @@ from obh.utils.prompts import VLM_OBJECT_DET_SYS_PROMPT
 from obh.utils.validation import validate_and_clean_vlm_response
 
 
-def add_common_llm_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
+# Common Click options for LLM configuration
+def add_common_llm_options(func):
+    """Decorator to add common LLM options to Click commands."""
+    func = click.option(
         "--rpm",
         type=int,
         default=60,
         help="Requests per minute limit (default: 60)",
-    )
-    parser.add_argument(
+    )(func)
+    func = click.option(
         "--model",
         type=str,
         default="openai/gpt-4o",
         help="LLM model to use (default: openai/gpt-4o)",
-    )
-    parser.add_argument(
+    )(func)
+    func = click.option(
         "--base-url",
         type=str,
         default="https://openrouter.ai/api/v1",
         help="Base URL for LLM API (default: OpenRouter)",
-    )
-    parser.add_argument(
+    )(func)
+    func = click.option(
         "--api-key",
         type=str,
         help="API key (default: from OPENROUTER_API_KEY env var)",
-    )
-    parser.add_argument(
+    )(func)
+    func = click.option(
         "--batch-size",
         type=int,
-        default=100,
+        default=10,
         help="Batch size for processing (default: 100)",
+    )(func)
+    return func
+
+
+@click.group()
+def cli():
+    """Object Harvest Detection CLI."""
+    pass
+
+
+@cli.command()
+@click.option(
+    "--input",
+    type=str,
+    required=True,
+    help="Input directory containing images",
+)
+@click.option(
+    "--output",
+    type=str,
+    required=True,
+    help="Output JSONL file path",
+)
+@add_common_llm_options
+def vlm(input: str, output: str, rpm: int, model: str, base_url: str, api_key: str, batch_size: int) -> None:
+    """Detect objects in images using VLM."""
+    # Create args namespace to maintain compatibility with existing vlm_task function
+    from argparse import Namespace
+    args = Namespace(
+        input=input,
+        output=output,
+        rpm=rpm,
+        model=model,
+        base_url=base_url,
+        api_key=api_key,
+        batch_size=batch_size
     )
+    result = vlm_task(args)
+    if result != 0:
+        raise click.ClickException(f"VLM task failed with exit code {result}")
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Object Harvest Detection")
-    subparsers = parser.add_subparsers(dest="task", help="Available tasks")
-
-    # VLM subcommand
-    vlm_parser = subparsers.add_parser("vlm", help="Detect objects in images using VLM")
-    vlm_parser.add_argument(
-        "--input",
-        type=str,
-        required=True,
-        help="Input directory containing images",
-    )
-    vlm_parser.add_argument(
-        "--output",
-        type=str,
-        required=True,
-        help="Output JSONL file path",
-    )
-    add_common_llm_args(vlm_parser)
-
-    return parser.parse_args()
-
-
-def vlm_task(args: argparse.Namespace) -> int:
+def vlm_task(args) -> int:
     # Find image files
     image_extensions = ['*.jpg', '*.jpeg', '*.png']
     image_paths = []
@@ -113,7 +131,10 @@ def vlm_task(args: argparse.Namespace) -> int:
     total_attempted = 0
     total_failed = 0
     total_successful = 0
-    with ThreadPoolExecutor(max_workers=min(rpm, batch_size, os.cpu_count())) as executor:
+    # Ensure rpm and batch_size are not None before using min
+    cpu_count = os.cpu_count() or 1  # Fallback to 1 if os.cpu_count() returns None
+    max_workers = min(rpm, batch_size, cpu_count)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
         for start in range(0, len(image_paths), batch_size):
             batch_end = min(start + batch_size, len(image_paths))
             batch_paths = image_paths[start:batch_end]
@@ -145,12 +166,10 @@ def vlm_task(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
-    args = parse_args()
-    if args.task == "vlm":
-        return vlm_task(args)
-    else:
-        print("Error: No task specified. Use 'vlm'.")
-        return 1
+    # Use Click's command invocation
+    # The cli() function will handle command routing
+    cli(prog_name='obh-detect')
+    return 0
 
 
 if __name__ == "__main__":
