@@ -1,158 +1,171 @@
-# AGENTS.md
+# Agent Guidelines for object-harvest
 
-## Prerequisites & Environment Setup
+## Overview
+object-harvest is a Python 3.12+ tool for generating and processing object-related data:
+- Prompt generation using LLMs (via OpenRouter)
+- Image generation from prompts (Qwen-Image)
+- VLM object detection with bounding boxes
+- NDJSON structured output
 
-* **Python version requirement**:
-  The project requires **Python ≥ 3.12** (i.e. 3.12 or newer).
-* **Environment management tool**:
-  All agents **must** use `uv` (the uv environment manager) for managing the Python environment (virtual environment, dependencies).
+All runtime code belongs under `obh/`. Treat every change as greenfield.
 
-  * e.g. `uv init`, `uv venv`, `uv install`, `uv run ...`, etc.
-  * Do *not* use `venv` or `pipenv` or `poetry` in isolation; `uv` must wrap or orchestrate all environment and execution.
-* **Dependency installation**:
-  After cloning, an agent should typically run something like:
+## Environment Setup
+Always work through `uv`; never call `python`/`pip` directly.
 
-  ```bash
-  uv venv
-  uv install --dev
-  ```
+```bash
+uv venv
+uv install --dev
+```
 
-  (Assuming your project’s `pyproject.toml` or equivalent supports a “dev” extras install.)
-* **Activating / running commands**:
-  Use `uv run <command>` to invoke test, lint, format, etc., so they run in the right environment.
+Add packages with `uv add <package>` to keep `pyproject.toml` as the single source of truth.
 
-## Code Style & Linting
+## Build/Lint/Test Commands
 
-We maintain **strict enforcement** of linting and style. The guiding tool is **ruff**.
+### Linting and Formatting
+```bash
+uv run ruff check --fix .
+```
+Run this before every commit. Ruff is the only configured linter.
 
-* Every pull request **must** pass:
+### Running Tests
+```bash
+# Run all tests
+uv run pytest
 
-  ```bash
-  uv run ruff check --fix .
-  ```
+# Run a single test file
+uv run pytest tests/test_detect.py
 
-  before merging (or as part of CI).
-* The linter may autocorrect many issues; but remaining violations must be addressed by the author.
-* Do **not** disable rules globally unless there is a very strong justification (and discussed with maintainers).
-* Prefer idiomatic, clear Python style, consistent naming, and readability.
+# Run a single test function
+uv run pytest tests/test_detect.py::test_vlm_task_with_mocked_dependencies
 
-Additional style expectations:
+# Run with verbose output
+uv run pytest -v
+```
 
-* Modular code: keep functions/classes small and single-purpose.
-* Appropriate docstrings (PEP-257 style) for public APIs.
-* Follow PEP-8 naming and formatting conventions (as enforced by ruff).
-* No trailing whitespace, correct indentation, line lengths (as configured), etc.
+## Code Style Guidelines
 
-## Typing & Type Safety (`typing`)
+### Imports
+Order: standard library, third-party, local (obh.*). Use explicit imports, avoid `*`.
 
-We aim for high-quality type annotations. The following rules apply:
+```python
+import os
+from typing import Optional, Dict, Any
 
-1. **Explicit types are preferred**
+import click
+from tqdm import tqdm
 
-   * Annotate function arguments and return types unless in extremely trivial local lambdas.
-   * Use `-> None`, `-> int`, `-> MyClass`, `-> Union[...]`, etc., rather than relying on inference.
+from obh.utils import setup_llm_client, rate_limited_call
+```
 
-2. **Allowed constructs**
+### Type Annotations
+All public functions/classes require full type annotations. Use standard typing module types:
+- `Optional[T]`, `List[T]`, `Dict[K, V]`, `Any`
+- For classes, use `Mapping[str, Tuple[int, int]]` etc.
+- `from __future__ import annotations` is not used (Python 3.12+)
 
-   * `cast(...)` is okay when you know a type conversion but need to appease the type checker.
-   * `assert ...` is acceptable when narrowing types in control flow (e.g. `assert x is not None`).
-   * In **rare, simple cases**, an untyped argument (e.g. `def reward(state): ...`) may be allowed if it is trivial and internal; but strive to gradually add types.
+```python
+def process_image(img_path: str) -> Optional[Dict[str, Any]]:
+    """Process an image and return metadata."""
+    ...
+```
 
-3. **Forbidden / discouraged**
+### Naming Conventions
+- Functions/variables: `snake_case`
+- Classes: `PascalCase`
+- Constants: `SCREAMING_SNAKE_CASE`
+- Private functions/modules: `_leading_underscore`
 
-   * Avoid sprinkling `# type: ignore` unless there is **strong justification**, documented with a comment explaining *why*.
-   * Do *not* suppress type errors silently or globally.
-   * Unchecked dynamic typing should be the exception, not the norm.
+```python
+MAX_SEED = np.iinfo(np.int32).max
 
-4. **Type checking in CI**
+class QwenImage:
+    def __call__(self, prompt: str) -> Image.Image:
+        ...
+```
 
-   * In continuous integration (CI), we should run `mypy` (or equivalent) to enforce that there are no new typing errors.
-   * PRs which introduce type errors should be blocked.
+### Docstrings
+Google-style with Args/Returns/Raises sections. Only add where business logic needs context.
 
-## Testing
+```python
+def validate_response(response: str) -> Dict[str, Any]:
+    """Parse and validate LLM response.
 
-Testing is essential for project correctness, stability, and future refactoring.
+    Args:
+        response: Raw LLM response string.
 
-* Use **pytest**, with discovery under `tests/`.
-  Command:
+    Returns:
+        Validated dict with 'describe' and 'objects'.
 
-  ```bash
-  uv run pytest
-  ```
-* **Tests should be:**
+    Raises:
+        ValueError: If response cannot be validated.
+    """
+```
 
-  * **Simple and deterministic** — avoid randomness or external dependencies.
-  * **Unit tests first** — smaller, isolated functions and classes.
-  * **Coverage for new behavior** — each new public function or behavior must have appropriate test coverage.
-* **Test organization**
+### Error Handling
+- Use `ValueError` for validation errors with descriptive messages
+- Try/except specific exceptions, avoid bare except
+- Task functions return `int`: 0 for success, 1 for failure
+- CLI functions raise `click.ClickException` on failure
 
-  * `tests/` directory mirrors some module structure of the code, where appropriate.
-  * Use fixtures only when beneficial, avoid over-complex test machinery.
-* **No flaky or timing-dependent tests**
+```python
+def setup_llm_client(base_url: str, api_key: Optional[str]) -> OpenAI:
+    api_key = api_key or os.getenv("OPENROUTER_API_KEY")
+    if not api_key:
+        raise ValueError("API key not provided")
+    return OpenAI(base_url=base_url, api_key=api_key)
+```
 
-  * If a test sometimes fails due to timing, rewrites or stabilization is required.
-  * External I/O or network calls should be mocked or isolated.
+### CLI Patterns
+Use Click framework with decorators:
+- Common options: define `add_common_llm_options` decorator
+- Command groups: `@click.group()`, `@cli.command()`
+- Args use `click.option()` with type hints
+- Raise `click.ClickException` for CLI errors
 
-## Pull Request / Review Workflow
+```python
+@click.command()
+@click.option("--input", type=str, required=True)
+@click.option("--output", type=str, required=True)
+@add_common_llm_options
+def vlm(input: str, output: str, model: str, ...) -> None:
+    """Detect objects in images using VLM."""
+    ...
+```
 
-To keep the codebase clean and manageable:
+## Project Layout
+```
+obh/
+  __init__.py              # Intentionally empty; expose public entry points here
+  generate.py              # CLI for generation tasks (prompt-gen, image-gen, prompt-enhance)
+  detect.py                # CLI for detection tasks (vlm)
+  utils/
+    __init__.py            # Export shared utilities
+    llm_utils.py           # LLM client, rate limiting, helpers
+    validation.py           # Response validation
+    prompts.py             # System prompts
+tests/
+  test_generate.py         # Tests for generate.py
+  test_detect.py           # Tests for detect.py
+```
 
-1. **One logical change per PR**
+## Development Workflow
+1. Make changes and run `uv run ruff check --fix .` to fix formatting/linting
+2. Run relevant tests: `uv run pytest tests/<path>`
+3. Add tests for new features (tests/ mirrors obh/ structure)
+4. Delete dead code instead of commenting out; update dependent tests in same change
+5. Keep PRs narrowly scoped: one feature or refactor per PR
+6. Update README.md if change alters usage expectations
 
-   * Each PR should focus on a single feature, bugfix, or refactor.
-   * Do not bundle multiple unrelated changes in one PR.
+## Quality Standards
+- Public functions/classes: full type annotations + docstrings
+- Internal helpers: type annotations, docstrings only if logic needs context
+- Avoid `# type: ignore` without short justification + follow-up issue link
+- Modules should be small and focused
+- Use `concurrent.futures.ThreadPoolExecutor` with `tqdm` for progress on batch work
+- Rate limiting: use `rate_limited_call` wrapper for LLM API calls
+- NDJSON/JSONL format: one JSON object per line with `json.dumps() + "\n"`
 
-2. **Small diffs, incremental improvement**
-
-   * Break large changes into smaller, reviewable chunks when possible.
-   * It’s easier to review and reason about small changes.
-
-3. **Backward compatibility policy**
-
-   * Backward compatibility is *desirable*, but **not mandatory** if supporting it would impose excessive maintenance burden (e.g. building in lots of legacy code paths).
-   * If removing or changing a public API, update relevant tests and document the change in changelog / release notes.
-
-4. **Review checks**
-   Before merging:
-
-   * Ensure `uv run ruff check --fix .` yields no violations.
-   * Ensure `uv run pytest` passes.
-   * Review type annotations; ensure no `# type: ignore` remains un-justified.
-   * Confirm the change is focused and does not unduly affect unrelated code.
-
-5. **Commit messages**
-
-   * Use descriptive commit messages, e.g. `Add feature X`, `Fix bug in Y`, `Refactor Z for clarity`.
-   * If a change is nontrivial, include rationale or linking to issue/PR discussion.
-
-## Scope & Change Philosophy
-
-* The project should evolve **incrementally** and **managably**.
-* Changes should be **as focused as possible**, with small, self-contained patches.
-* Maintain readability, maintainability, and clarity as guiding principles.
-* Avoid overengineering; do not add features or abstractions prematurely (“You ain’t gonna need it”).
-* If backward compatibility (BC) is expensive or complicates code, it may be acceptable to break compatibility — but document it clearly (in changelog or release notes).
-
-## Dead Code & Refactoring
-
-* **Delete dead code outright** — do *not* keep dead branches behind flags or commented out code.
-* When functionality is changed or removed, **update or remove corresponding tests** immediately.
-* Refactor code as necessary to reduce duplication or improve clarity; but always accompany refactor with tests to preserve behavior.
-* Avoid speculative abstractions; refactor when you see a concrete need or duplication.
-
-## Agent Responsibilities & Checklist
-
-Here’s a checklist each agent (contributor) should keep in mind when working on *object-harvest*:
-
-| Area                   | Agent Responsibility                                                         |
-| ---------------------- | ---------------------------------------------------------------------------- |
-| Environment tool       | Use `uv` (never raw `venv`, pipenv, etc.)                                    |
-| Python version         | Ensure the Python interpreter is ≥ 3.12                                      |
-| Activate environment   | Run `source .venv/bin/activate` (or equivalent) before using the environment |
-| Linting                | Run `uv run ruff check --fix .` locally before pushing                       |
-| Typing                 | Add explicit type annotations; avoid unjustified `# type: ignore`            |
-| Testing                | Add or update tests under `tests/`; ensure `uv run pytest` passes            |
-| PR Size                | Keep changes focused; one logical change per PR                              |
-| Backward Compatibility | Consider it, but not at cost of code clarity                                 |
-| Dead Code              | Remove rather than hide; update tests accordingly                            |
-| Commit / PR            | Write descriptive commits; keep the review size manageable                   |
+## References
+- `pyproject.toml` — dependency list, bump version for user-visible changes
+- `.github/copilot-instructions.md` — additional context
+- `README.md` — usage documentation, keep in sync with changes
