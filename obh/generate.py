@@ -3,7 +3,6 @@ from typing import Optional, Dict, Any
 import random
 import click
 import json
-import uuid
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -110,42 +109,6 @@ def prompt_gen(objects_file: str, objects_list: str, num_prompts: int, output: s
     result = prompt_gen_task(args)
     if result != 0:
         raise click.ClickException(f"Prompt generation task failed with exit code {result}")
-
-
-@cli.command()
-@click.option("--input", type=str, required=True, help="Input NDJSON file")
-@click.option("--output", type=str, required=True, help="Output directory to save generated images and metadata")
-@click.option("--model-path", type=str, default="Qwen/Qwen-Image", help="Hugging Face model path (default: Qwen/Qwen-Image)")
-@click.option("--input-prompt-field", type=str, default="prompt", help="Field in input NDJSON to use as prompt (default: prompt)")
-@click.option("--aspect-ratio", type=str, help="Aspect ratio from ASPECT_RATIO_SIZES (optional)")
-@click.option("--num-inference-steps", type=int, default=8, help="Number of inference steps (default: 8)")
-@click.option("--steps", type=int, default=1, help="Number of images to generate per prompt (default: 1)")
-@click.option("--seed", type=int, default=0, help="Seed for reproducibility (default: 0)")
-@click.option("--randomize-seed/--no-randomize-seed", default=True, help="Randomize seed (default: True)")
-@click.option("--guidance-scale", type=float, default=1.0, help="Guidance scale (default: 1.0)")
-@click.option("--format", type=click.Choice(["png", "jpeg"]), default="jpeg", help="Image format (default: jpeg)")
-def image_gen(input: str, output: str, model_path: str, input_prompt_field: str, 
-              aspect_ratio: str, num_inference_steps: int, steps: int, seed: int, 
-              randomize_seed: bool, guidance_scale: float, format: str) -> None:
-    """Generate images using Qwen-Image."""
-    # Create args namespace to maintain compatibility with existing image_gen_task function
-    from argparse import Namespace
-    args = Namespace(
-        input=input,
-        output=output,
-        model_path=model_path,
-        input_prompt_field=input_prompt_field,
-        aspect_ratio=aspect_ratio,
-        num_inference_steps=num_inference_steps,
-        steps=steps,
-        seed=seed,
-        randomize_seed=randomize_seed,
-        guidance_scale=guidance_scale,
-        format=format
-    )
-    result = image_gen_task(args)
-    if result != 0:
-        raise click.ClickException(f"Image generation task failed with exit code {result}")
 
 
 @cli.command()
@@ -264,98 +227,6 @@ def prompt_gen_task(args) -> int:
     print(f"  Total attempted: {total_attempted}")
     print(f"  Successful: {total_successful}")
     print(f"  Failed: {total_failed}")
-    return 0
-
-
-def image_gen_task(args) -> int:
-    # Validate aspect_ratio if provided
-    if args.aspect_ratio and args.aspect_ratio not in ASPECT_RATIO_SIZES:
-        print(f"Error: Invalid aspect ratio '{args.aspect_ratio}'. Valid options: {list(ASPECT_RATIO_SIZES.keys())}")
-        return 1
-
-    # Create output directories
-    images_dir = os.path.join(args.output, "images")
-    os.makedirs(images_dir, exist_ok=True)
-
-    # Initialize QwenImage
-    generator = QwenImage(model_path=args.model_path)
-
-    # Read input NDJSON
-    input_data = []
-    try:
-        with open(args.input, "r") as f:
-            for line in f:
-                if line.strip():
-                    input_data.append(json.loads(line.strip()))
-    except FileNotFoundError:
-        print(f"Error: Input file '{args.input}' not found.")
-        return 1
-    except json.JSONDecodeError as e:
-        print(f"Error: Invalid JSON in input file: {e}")
-        return 1
-
-    # Prepare metadata file
-    metadata_path = os.path.join(args.output, "metadata.ndjson")
-    with open(metadata_path, "w") as f:
-        pass  # clear
-
-    total_images = 0
-    for idx, entry in enumerate(tqdm(input_data, desc="Processing prompts")):
-        # Get prompt
-        prompt = entry.get(args.input_prompt_field)
-        if prompt is None:
-            prompt = entry.get("describe")
-        if prompt is None:
-            print(f"Warning: No '{args.input_prompt_field}' or 'describe' field in entry {idx}, skipping.")
-            continue
-
-        # Generate steps images
-        for step in range(args.steps):
-            if args.randomize_seed:
-                seed = random.randint(0, MAX_SEED)
-                print(f"Using random seed {seed} for entry {idx}, step {step}")
-            else:
-                seed = args.seed + step  # vary per step for reproducibility
-
-            # Generate image
-            image = generator(
-                prompt=prompt,
-                aspect_ratio=args.aspect_ratio,
-                num_inference_steps=args.num_inference_steps,
-                seed=seed,
-                randomize_seed=False,  # we handle seed here
-                guidance_scale=args.guidance_scale,
-            )
-
-            # Generate uuid
-            img_uuid = str(uuid.uuid4())
-
-            # Filename
-            filename = f"{idx}_{img_uuid}.{args.format}"
-
-            img_path = os.path.join(images_dir, filename)
-
-            # Save image
-            image.save(img_path, args.format.upper())
-
-            # Metadata entry
-            meta_entry = {
-                "image_path": f"images/{filename}",
-            }
-            if "prompt" in entry:
-                meta_entry["prompt"] = entry["prompt"]
-            if "describe" in entry:
-                meta_entry["describe"] = entry["describe"]
-            if "objects" in entry:
-                meta_entry["objects"] = entry["objects"]
-
-            # Append to metadata
-            with open(metadata_path, "a") as f:
-                f.write(json.dumps(meta_entry) + "\n")
-
-            total_images += 1
-
-    print(f"Generated {total_images} images to {args.output}")
     return 0
 
 
