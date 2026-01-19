@@ -3,7 +3,7 @@
 ## Overview
 object-harvest is a Python 3.12+ tool for generating and processing object-related data:
 - Prompt generation using LLMs (via OpenRouter)
-- Image generation from prompts (Qwen-Image)
+- Image captioning using Moondream API
 - VLM object detection with bounding boxes
 - NDJSON structured output
 
@@ -136,11 +136,12 @@ def vlm(input: str, output: str, model: str, ...) -> None:
 ```
 obh/
   __init__.py              # Intentionally empty; expose public entry points here
-  generate.py              # CLI for generation tasks (prompt-gen, image-gen, prompt-enhance)
+  generate.py              # CLI for generation tasks (prompt-gen, moondream-caption)
   detect.py                # CLI for detection tasks (vlm)
   utils/
     __init__.py            # Export shared utilities
     llm_utils.py           # LLM client, rate limiting, helpers
+    moondream_utils.py     # Moondream API utilities
     validation.py           # Response validation
     prompts.py             # System prompts
 tests/

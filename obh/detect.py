@@ -42,7 +42,7 @@ def add_common_llm_options(func):
         "--batch-size",
         type=int,
         default=10,
-        help="Batch size for processing (default: 100)",
+        help="Batch size for processing (default: 10)",
     )(func)
     return func
 

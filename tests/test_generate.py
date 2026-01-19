@@ -24,20 +24,6 @@ def test_click_prompt_gen_command():
         assert result.exit_code == 0
 
 
-def test_click_prompt_enhance_command():
-    """Test that the Click prompt-enhance command works correctly."""
-    runner = CliRunner()
-    
-    # Test that the command runs without error (with mocked dependencies)
-    with patch('obh.generate.prompt_enhance_task', return_value=0):
-        result = runner.invoke(cli, [
-            'prompt-enhance',
-            '--input', '/fake/input.ndjson',
-            '--output', '/fake/output.ndjson'
-        ])
-        
-        # Check that the command executed without error
-        assert result.exit_code == 0
 
 
 def test_prompt_gen_task_with_mocked_dependencies():
