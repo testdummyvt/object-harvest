@@ -67,10 +67,19 @@ def cli():
     help="Output JSONL file path",
 )
 @add_common_llm_options
-def vlm(input: str, output: str, rpm: int, model: str, base_url: str, api_key: str, batch_size: int) -> None:
+def vlm(
+    input: str,
+    output: str,
+    rpm: int,
+    model: str,
+    base_url: str,
+    api_key: str,
+    batch_size: int,
+) -> None:
     """Detect objects in images using VLM."""
     # Create args namespace to maintain compatibility with existing vlm_task function
     from argparse import Namespace
+
     args = Namespace(
         input=input,
         output=output,
@@ -78,7 +87,7 @@ def vlm(input: str, output: str, rpm: int, model: str, base_url: str, api_key: s
         model=model,
         base_url=base_url,
         api_key=api_key,
-        batch_size=batch_size
+        batch_size=batch_size,
     )
     result = vlm_task(args)
     if result != 0:
@@ -87,7 +96,7 @@ def vlm(input: str, output: str, rpm: int, model: str, base_url: str, api_key: s
 
 def vlm_task(args) -> int:
     # Find image files
-    image_extensions = ['*.jpg', '*.jpeg', '*.png']
+    image_extensions = ["*.jpg", "*.jpeg", "*.png"]
     image_paths = []
     for ext in image_extensions:
         image_paths.extend(glob.glob(os.path.join(args.input, ext)))
@@ -106,7 +115,15 @@ def vlm_task(args) -> int:
         b64 = encode_image_to_base64(img_path)
         messages = [
             {"role": "system", "content": VLM_OBJECT_DET_SYS_PROMPT},
-            {"role": "user", "content": [{"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}]},
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
+                    }
+                ],
+            },
         ]
         response = rate_limited_call(
             client,
@@ -118,7 +135,10 @@ def vlm_task(args) -> int:
             data = validate_and_clean_vlm_response(response)
             labels = [obj["labels"] for obj in data["objects"]]
             bboxes = [obj["bbox_2d"] for obj in data["objects"]]
-            return {"objects": {"labels": labels, "bbox": bboxes}, "file_path": img_path}
+            return {
+                "objects": {"labels": labels, "bbox": bboxes},
+                "file_path": img_path,
+            }
         except ValueError as e:
             print(f"Error validating response for {img_path}: {e}")
             return None
@@ -138,9 +158,15 @@ def vlm_task(args) -> int:
         for start in range(0, len(image_paths), batch_size):
             batch_end = min(start + batch_size, len(image_paths))
             batch_paths = image_paths[start:batch_end]
-            futures = [executor.submit(process_image, img_path) for img_path in batch_paths]
+            futures = [
+                executor.submit(process_image, img_path) for img_path in batch_paths
+            ]
             batch_results = []
-            for future in tqdm(as_completed(futures), total=len(futures), desc=f"Batch {start//batch_size + 1}"):
+            for future in tqdm(
+                as_completed(futures),
+                total=len(futures),
+                desc=f"Batch {start // batch_size + 1}",
+            ):
                 total_attempted += 1
                 try:
                     result = future.result()
@@ -168,7 +194,7 @@ def vlm_task(args) -> int:
 def main() -> int:
     # Use Click's command invocation
     # The cli() function will handle command routing
-    cli(prog_name='obh-detect')
+    cli(prog_name="obh-detect")
     return 0
 
 

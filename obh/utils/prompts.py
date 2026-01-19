@@ -21,7 +21,7 @@ PROMPTGEN_SYS_PROMPT = (
 )
 
 
-VLM_OBJECT_DET_SYS_PROMPT = '''
+VLM_OBJECT_DET_SYS_PROMPT = """
 'You are an image-understanding assistant. When given an image, detect all objects and output only valid JSON with a single top-level key "objects" whose value is an array of object descriptions. Each object description must be an object with exactly two keys:
 
 - "labels" — a concise object name as a string (use the singular/common noun for each instance; do NOT append " (group)" or otherwise merge multiple instances).
@@ -55,4 +55,7 @@ Example output (for reference):
       "bbox_2d": [0, 579, 1000, 797]
     }
   ]
-}'''
+}"""
+
+
+CAPTION_SYS_PROMPT = """Write a caption for this image in a single paragraph."""

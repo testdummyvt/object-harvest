@@ -41,7 +41,7 @@ def encode_image_to_base64(image_path: str) -> str:
         Base64 encoded string of the image.
     """
     with open(image_path, "rb") as f:
-        return base64.b64encode(f.read()).decode('utf-8')
+        return base64.b64encode(f.read()).decode("utf-8")
 
 
 def setup_llm_client(base_url: str, api_key: Optional[str]) -> OpenAI:
@@ -56,7 +56,9 @@ def setup_llm_client(base_url: str, api_key: Optional[str]) -> OpenAI:
     """
     api_key = api_key or os.getenv("OPENROUTER_API_KEY")
     if not api_key:
-        raise ValueError("API key not provided. Set OPENROUTER_API_KEY env var or use --api-key.")
+        raise ValueError(
+            "API key not provided. Set OPENROUTER_API_KEY env var or use --api-key."
+        )
     return OpenAI(base_url=base_url, api_key=api_key)
 
 

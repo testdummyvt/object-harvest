@@ -16,7 +16,7 @@ def validate_and_clean_prompt_gen_response(response: str) -> Dict[str, Any]:
         ValueError: If response cannot be validated.
     """
     # Try to extract JSON from response if there's extra text
-    json_match = re.search(r'\{.*\}', response, re.DOTALL)
+    json_match = re.search(r"\{.*\}", response, re.DOTALL)
     if json_match:
         json_str = json_match.group(0)
     else:
@@ -65,7 +65,7 @@ def validate_and_clean_vlm_response(response: str) -> Dict[str, Any]:
         ValueError: If response cannot be validated.
     """
     # Try to extract JSON from response if there's extra text
-    json_match = re.search(r'\{.*\}', response, re.DOTALL)
+    json_match = re.search(r"\{.*\}", response, re.DOTALL)
     if json_match:
         json_str = json_match.group(0)
     else:

@@ -8,9 +8,19 @@ from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
-from obh.utils import load_objects, setup_llm_client, rate_limited_call, setup_moondream_client, rate_limited_caption
-from obh.utils.prompts import PROMPTGEN_SYS_PROMPT
-from obh.utils.validation import validate_and_clean_prompt_gen_response, restructure_objects
+from obh.utils import (
+    load_objects,
+    setup_llm_client,
+    rate_limited_call,
+    setup_moondream_client,
+    rate_limited_caption,
+    encode_image_to_base64,
+)
+from obh.utils.prompts import PROMPTGEN_SYS_PROMPT, CAPTION_SYS_PROMPT
+from obh.utils.validation import (
+    validate_and_clean_prompt_gen_response,
+    restructure_objects,
+)
 
 
 # Common Click options for LLM configuration
@@ -88,12 +98,23 @@ def cli():
     help="Maximum number of objects to randomly select per prompt (optional)",
 )
 @add_common_llm_options
-def prompt_gen(objects_file: str, objects_list: str, num_prompts: int, output: str, 
-               min_objects: int, max_objects: int, rpm: int, model: str, 
-               base_url: str, api_key: str, batch_size: int) -> None:
+def prompt_gen(
+    objects_file: str,
+    objects_list: str,
+    num_prompts: int,
+    output: str,
+    min_objects: int,
+    max_objects: int,
+    rpm: int,
+    model: str,
+    base_url: str,
+    api_key: str,
+    batch_size: int,
+) -> None:
     """Generate prompts using LLM."""
     # Create args namespace to maintain compatibility with existing prompt_gen_task function
     from argparse import Namespace
+
     args = Namespace(
         objects_file=objects_file,
         objects_list=objects_list,
@@ -105,13 +126,13 @@ def prompt_gen(objects_file: str, objects_list: str, num_prompts: int, output: s
         model=model,
         base_url=base_url,
         api_key=api_key,
-        batch_size=batch_size
+        batch_size=batch_size,
     )
     result = prompt_gen_task(args)
     if result != 0:
-        raise click.ClickException(f"Prompt generation task failed with exit code {result}")
-
-
+        raise click.ClickException(
+            f"Prompt generation task failed with exit code {result}"
+        )
 
 
 def prompt_gen_task(args) -> int:
@@ -124,7 +145,9 @@ def prompt_gen_task(args) -> int:
     # Validate min/max objects arguments
     if args.min_objects is not None or args.max_objects is not None:
         if args.min_objects is None or args.max_objects is None:
-            print("Error: Both --min-objects and --max-objects must be specified together.")
+            print(
+                "Error: Both --min-objects and --max-objects must be specified together."
+            )
             return 1
         if args.min_objects > args.max_objects:
             print("Error: --min-objects cannot be greater than --max-objects.")
@@ -133,7 +156,9 @@ def prompt_gen_task(args) -> int:
             print("Error: --min-objects and --max-objects must be at least 1.")
             return 1
         if args.max_objects > len(objects):
-            print(f"Error: --max-objects cannot be greater than the number of available objects ({len(objects)}).")
+            print(
+                f"Error: --max-objects cannot be greater than the number of available objects ({len(objects)})."
+            )
             return 1
 
     # Setup LLM client
@@ -143,7 +168,12 @@ def prompt_gen_task(args) -> int:
     rpm = args.rpm
     interval = 60 / rpm  # seconds between requests
 
-    def generate_prompt(_: int, objects: list[str], min_objects: Optional[int], max_objects: Optional[int]) -> Dict[str, Any]:
+    def generate_prompt(
+        _: int,
+        objects: list[str],
+        min_objects: Optional[int],
+        max_objects: Optional[int],
+    ) -> Dict[str, Any]:
         if min_objects is not None and max_objects is not None:
             num = random.randint(min_objects, max_objects)
             selected_objects = random.sample(objects, num)
@@ -176,9 +206,18 @@ def prompt_gen_task(args) -> int:
         for start in range(0, args.num_prompts, batch_size):
             batch_end = min(start + batch_size, args.num_prompts)
             batch_indices = range(start, batch_end)
-            futures = [executor.submit(generate_prompt, i, objects, args.min_objects, args.max_objects) for i in batch_indices]
+            futures = [
+                executor.submit(
+                    generate_prompt, i, objects, args.min_objects, args.max_objects
+                )
+                for i in batch_indices
+            ]
             batch_results = []
-            for future in tqdm(as_completed(futures), total=len(futures), desc=f"Batch {start//batch_size + 1}"):
+            for future in tqdm(
+                as_completed(futures),
+                total=len(futures),
+                desc=f"Batch {start // batch_size + 1}",
+            ):
                 total_attempted += 1
                 try:
                     result = future.result()
@@ -200,6 +239,151 @@ def prompt_gen_task(args) -> int:
     return 0
 
 
+@cli.command("caption")
+@click.option(
+    "--input",
+    type=str,
+    required=True,
+    help="Input directory containing images or path to a single image",
+)
+@click.option(
+    "--output",
+    type=str,
+    required=True,
+    help="Output JSONL file path",
+)
+@add_common_llm_options
+def caption(
+    input: str,
+    output: str,
+    rpm: int,
+    model: str,
+    base_url: str,
+    api_key: str,
+    batch_size: int,
+) -> None:
+    """Generate image captions using OpenAI API."""
+    from argparse import Namespace
+
+    args = Namespace(
+        input=input,
+        output=output,
+        rpm=rpm,
+        model=model,
+        base_url=base_url,
+        api_key=api_key,
+        batch_size=batch_size,
+    )
+    result = caption_task(args)
+    if result != 0:
+        raise click.ClickException(f"Caption task failed with exit code {result}")
+
+
+def caption_task(args) -> int:
+    """Run OpenAI-based image captioning task."""
+    # Find image files
+    image_extensions = ["*.jpg", "*.jpeg", "*.png", "*.webp"]
+    image_paths = []
+
+    if os.path.isfile(args.input):
+        image_paths = [args.input]
+    elif os.path.isdir(args.input):
+        for ext in image_extensions:
+            image_paths.extend(glob.glob(os.path.join(args.input, ext)))
+            image_paths.extend(glob.glob(os.path.join(args.input, ext.upper())))
+    else:
+        print(f"Error: Input path '{args.input}' does not exist.")
+        return 1
+
+    if not image_paths:
+        print(f"No image files found in {args.input}")
+        return 1
+
+    # Setup LLM client
+    try:
+        client = setup_llm_client(args.base_url, args.api_key)
+    except ValueError as e:
+        print(f"Error: {e}")
+        return 1
+
+    # Rate limiting setup
+    rpm = args.rpm
+    interval = 60 / rpm
+
+    def process_image(img_path: str) -> Optional[Dict[str, Any]]:
+        try:
+            base64_image = encode_image_to_base64(img_path)
+            response = rate_limited_call(
+                client,
+                model=args.model,
+                messages=[
+                    {"role": "system", "content": CAPTION_SYS_PROMPT},
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/jpeg;base64,{base64_image}"
+                                },
+                            },
+                        ],
+                    },
+                ],
+                interval=interval,
+            )
+            return {"file_path": img_path, "caption": response}
+        except Exception as e:
+            print(f"Error processing {img_path}: {e}")
+            return None
+
+    # Clear output file
+    with open(args.output, "w") as f:
+        pass
+
+    batch_size = args.batch_size
+    total_attempted = 0
+    total_failed = 0
+    total_successful = 0
+
+    cpu_count = os.cpu_count() or 1
+    max_workers = min(rpm, batch_size, cpu_count)
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        for start in range(0, len(image_paths), batch_size):
+            batch_end = min(start + batch_size, len(image_paths))
+            batch_paths = image_paths[start:batch_end]
+            futures = [
+                executor.submit(process_image, img_path) for img_path in batch_paths
+            ]
+            batch_results = []
+            for future in tqdm(
+                as_completed(futures),
+                total=len(futures),
+                desc=f"Batch {start // batch_size + 1}",
+            ):
+                total_attempted += 1
+                try:
+                    result = future.result()
+                    if result:
+                        batch_results.append(result)
+                        total_successful += 1
+                    else:
+                        total_failed += 1
+                except Exception as e:
+                    print(f"Error in captioning: {e}")
+                    total_failed += 1
+
+            with open(args.output, "a") as f:
+                for result in batch_results:
+                    f.write(json.dumps(result) + "\n")
+
+    print(f"Captioned {total_successful} images to {args.output}")
+    print("Caption generation summary:")
+    print(f"  Total attempted: {total_attempted}")
+    print(f"  Successful: {total_successful}")
+    print(f"  Failed: {total_failed}")
+    return 0
 
 
 @cli.command("moondream-caption")
@@ -250,10 +434,19 @@ def prompt_gen_task(args) -> int:
     default=False,
     help="Process images sequentially (useful for local models)",
 )
-def moondream_caption(input: str, output: str, length: str, local: bool,
-                      api_key: str, rpm: int, batch_size: int, sequential: bool) -> None:
+def moondream_caption(
+    input: str,
+    output: str,
+    length: str,
+    local: bool,
+    api_key: str,
+    rpm: int,
+    batch_size: int,
+    sequential: bool,
+) -> None:
     """Generate image captions using Moondream API."""
     from argparse import Namespace
+
     args = Namespace(
         input=input,
         output=output,
@@ -262,26 +455,28 @@ def moondream_caption(input: str, output: str, length: str, local: bool,
         api_key=api_key,
         rpm=rpm,
         batch_size=batch_size,
-        sequential=sequential
+        sequential=sequential,
     )
     result = moondream_caption_task(args)
     if result != 0:
-        raise click.ClickException(f"Moondream captioning task failed with exit code {result}")
+        raise click.ClickException(
+            f"Moondream captioning task failed with exit code {result}"
+        )
 
 
 def moondream_caption_task(args) -> int:
     """Run Moondream image captioning task.
-    
+
     Args:
         args: Namespace with input, output, length, local, api_key, rpm, batch_size, sequential
-        
+
     Returns:
         0 on success, non-zero on failure.
     """
     # Find image files
-    image_extensions = ['*.jpg', '*.jpeg', '*.png', '*.webp']
+    image_extensions = ["*.jpg", "*.jpeg", "*.png", "*.webp"]
     image_paths = []
-    
+
     if os.path.isfile(args.input):
         # Single image file
         image_paths = [args.input]
@@ -330,7 +525,7 @@ def moondream_caption_task(args) -> int:
     total_attempted = 0
     total_failed = 0
     total_successful = 0
-    
+
     if args.sequential:
         # Sequential processing
         print("Running in sequential mode...")
@@ -347,14 +542,20 @@ def moondream_caption_task(args) -> int:
         # Parallel processing
         cpu_count = os.cpu_count() or 1
         max_workers = min(rpm, batch_size, cpu_count)
-        
+
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             for start in range(0, len(image_paths), batch_size):
                 batch_end = min(start + batch_size, len(image_paths))
                 batch_paths = image_paths[start:batch_end]
-                futures = [executor.submit(process_image, img_path) for img_path in batch_paths]
+                futures = [
+                    executor.submit(process_image, img_path) for img_path in batch_paths
+                ]
                 batch_results = []
-                for future in tqdm(as_completed(futures), total=len(futures), desc=f"Batch {start//batch_size + 1}"):
+                for future in tqdm(
+                    as_completed(futures),
+                    total=len(futures),
+                    desc=f"Batch {start // batch_size + 1}",
+                ):
                     total_attempted += 1
                     try:
                         result = future.result()
@@ -382,7 +583,7 @@ def moondream_caption_task(args) -> int:
 def main() -> int:
     # Use Click's command invocation
     # The cli() function will handle command routing
-    cli(prog_name='obh-generate')
+    cli(prog_name="obh-generate")
     return 0
 
 
