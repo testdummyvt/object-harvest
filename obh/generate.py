@@ -244,8 +244,14 @@ def prompt_gen_task(args) -> int:
     default=10,
     help="Batch size for processing (default: 10)",
 )
+@click.option(
+    "--sequential",
+    is_flag=True,
+    default=False,
+    help="Process images sequentially (useful for local models)",
+)
 def moondream_caption(input: str, output: str, length: str, local: bool,
-                      api_key: str, rpm: int, batch_size: int) -> None:
+                      api_key: str, rpm: int, batch_size: int, sequential: bool) -> None:
     """Generate image captions using Moondream API."""
     from argparse import Namespace
     args = Namespace(
@@ -255,7 +261,8 @@ def moondream_caption(input: str, output: str, length: str, local: bool,
         local=local,
         api_key=api_key,
         rpm=rpm,
-        batch_size=batch_size
+        batch_size=batch_size,
+        sequential=sequential
     )
     result = moondream_caption_task(args)
     if result != 0:
@@ -266,7 +273,7 @@ def moondream_caption_task(args) -> int:
     """Run Moondream image captioning task.
     
     Args:
-        args: Namespace with input, output, length, local, api_key, rpm, batch_size
+        args: Namespace with input, output, length, local, api_key, rpm, batch_size, sequential
         
     Returns:
         0 on success, non-zero on failure.
@@ -323,31 +330,46 @@ def moondream_caption_task(args) -> int:
     total_attempted = 0
     total_failed = 0
     total_successful = 0
-    cpu_count = os.cpu_count() or 1
-    max_workers = min(rpm, batch_size, cpu_count)
     
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        for start in range(0, len(image_paths), batch_size):
-            batch_end = min(start + batch_size, len(image_paths))
-            batch_paths = image_paths[start:batch_end]
-            futures = [executor.submit(process_image, img_path) for img_path in batch_paths]
-            batch_results = []
-            for future in tqdm(as_completed(futures), total=len(futures), desc=f"Batch {start//batch_size + 1}"):
+    if args.sequential:
+        # Sequential processing
+        print("Running in sequential mode...")
+        with open(args.output, "a") as f:
+            for img_path in tqdm(image_paths, desc="Processing sequentially"):
                 total_attempted += 1
-                try:
-                    result = future.result()
-                    if result:
-                        batch_results.append(result)
-                        total_successful += 1
-                    else:
-                        total_failed += 1
-                except Exception as e:
-                    print(f"Error in image captioning: {e}")
-                    total_failed += 1
-            # Append batch results to file
-            with open(args.output, "a") as f:
-                for result in batch_results:
+                result = process_image(img_path)
+                if result:
                     f.write(json.dumps(result) + "\n")
+                    total_successful += 1
+                else:
+                    total_failed += 1
+    else:
+        # Parallel processing
+        cpu_count = os.cpu_count() or 1
+        max_workers = min(rpm, batch_size, cpu_count)
+        
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            for start in range(0, len(image_paths), batch_size):
+                batch_end = min(start + batch_size, len(image_paths))
+                batch_paths = image_paths[start:batch_end]
+                futures = [executor.submit(process_image, img_path) for img_path in batch_paths]
+                batch_results = []
+                for future in tqdm(as_completed(futures), total=len(futures), desc=f"Batch {start//batch_size + 1}"):
+                    total_attempted += 1
+                    try:
+                        result = future.result()
+                        if result:
+                            batch_results.append(result)
+                            total_successful += 1
+                        else:
+                            total_failed += 1
+                    except Exception as e:
+                        print(f"Error in image captioning: {e}")
+                        total_failed += 1
+                # Append batch results to file
+                with open(args.output, "a") as f:
+                    for result in batch_results:
+                        f.write(json.dumps(result) + "\n")
 
     print(f"Captioned {total_successful} images to {args.output}")
     print("Moondream captioning summary:")

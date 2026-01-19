@@ -132,6 +132,7 @@ Generates image captions using the Moondream API, supporting both cloud (via API
 - `--api-key`: Moondream API key (overrides env var)
 - `--rpm`: Requests per minute limit (default: 60)
 - `--batch-size`: Batch size for processing (default: 10)
+- `--sequential`: Process images sequentially (useful for local models where parallel processing might overwhelm resources)
 
 **Example:**
 
