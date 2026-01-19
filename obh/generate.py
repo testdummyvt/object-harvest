@@ -2,12 +2,13 @@ import os
 from typing import Optional, Dict, Any
 import random
 import click
+import glob
 import json
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
-from obh.utils import load_objects, setup_llm_client, rate_limited_call
+from obh.utils import load_objects, setup_llm_client, rate_limited_call, setup_moondream_client, rate_limited_caption
 from obh.utils.prompts import PROMPTGEN_SYS_PROMPT, QWEN_T2I_SYS_PROMPT, MAGIC_PROMPT_EN
 from obh.utils.validation import validate_and_clean_prompt_gen_response, restructure_objects
 
@@ -300,6 +301,161 @@ def prompt_enhance_task(args) -> int:
             total_processed += len(batch_results)
 
     print(f"Enhanced {total_processed} prompts to {args.output}")
+    return 0
+
+
+@cli.command("moondream-caption")
+@click.option(
+    "--input",
+    type=str,
+    required=True,
+    help="Input directory containing images or path to a single image",
+)
+@click.option(
+    "--output",
+    type=str,
+    required=True,
+    help="Output NDJSON file path",
+)
+@click.option(
+    "--length",
+    type=click.Choice(["short", "normal", "long"]),
+    default="normal",
+    help="Caption length (default: normal)",
+)
+@click.option(
+    "--local",
+    is_flag=True,
+    default=False,
+    help="Use local Moondream server at http://localhost:2020/v1",
+)
+@click.option(
+    "--api-key",
+    type=str,
+    help="Moondream API key (default: from MOONDREAM_API_KEY env var)",
+)
+@click.option(
+    "--rpm",
+    type=int,
+    default=60,
+    help="Requests per minute limit (default: 60)",
+)
+@click.option(
+    "--batch-size",
+    type=int,
+    default=10,
+    help="Batch size for processing (default: 10)",
+)
+def moondream_caption(input: str, output: str, length: str, local: bool,
+                      api_key: str, rpm: int, batch_size: int) -> None:
+    """Generate image captions using Moondream API."""
+    from argparse import Namespace
+    args = Namespace(
+        input=input,
+        output=output,
+        length=length,
+        local=local,
+        api_key=api_key,
+        rpm=rpm,
+        batch_size=batch_size
+    )
+    result = moondream_caption_task(args)
+    if result != 0:
+        raise click.ClickException(f"Moondream captioning task failed with exit code {result}")
+
+
+def moondream_caption_task(args) -> int:
+    """Run Moondream image captioning task.
+    
+    Args:
+        args: Namespace with input, output, length, local, api_key, rpm, batch_size
+        
+    Returns:
+        0 on success, non-zero on failure.
+    """
+    # Find image files
+    image_extensions = ['*.jpg', '*.jpeg', '*.png', '*.webp']
+    image_paths = []
+    
+    if os.path.isfile(args.input):
+        # Single image file
+        image_paths = [args.input]
+    elif os.path.isdir(args.input):
+        # Directory of images
+        for ext in image_extensions:
+            image_paths.extend(glob.glob(os.path.join(args.input, ext)))
+            image_paths.extend(glob.glob(os.path.join(args.input, ext.upper())))
+    else:
+        print(f"Error: Input path '{args.input}' does not exist.")
+        return 1
+
+    if not image_paths:
+        print(f"No image files found in {args.input}")
+        return 1
+
+    # Setup Moondream client
+    try:
+        client = setup_moondream_client(api_key=args.api_key, local=args.local)
+    except ValueError as e:
+        print(f"Error: {e}")
+        return 1
+
+    # Rate limiting setup
+    rpm = args.rpm
+    interval = 60 / rpm  # seconds between requests
+
+    def process_image(img_path: str) -> Optional[Dict[str, Any]]:
+        try:
+            caption = rate_limited_caption(
+                client=client,
+                image_path=img_path,
+                length=args.length,
+                interval=interval,
+            )
+            return {"file_path": img_path, "caption": caption}
+        except Exception as e:
+            print(f"Error processing {img_path}: {e}")
+            return None
+
+    # Clear output file
+    with open(args.output, "w") as f:
+        pass
+
+    batch_size = args.batch_size
+    total_attempted = 0
+    total_failed = 0
+    total_successful = 0
+    cpu_count = os.cpu_count() or 1
+    max_workers = min(rpm, batch_size, cpu_count)
+    
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        for start in range(0, len(image_paths), batch_size):
+            batch_end = min(start + batch_size, len(image_paths))
+            batch_paths = image_paths[start:batch_end]
+            futures = [executor.submit(process_image, img_path) for img_path in batch_paths]
+            batch_results = []
+            for future in tqdm(as_completed(futures), total=len(futures), desc=f"Batch {start//batch_size + 1}"):
+                total_attempted += 1
+                try:
+                    result = future.result()
+                    if result:
+                        batch_results.append(result)
+                        total_successful += 1
+                    else:
+                        total_failed += 1
+                except Exception as e:
+                    print(f"Error in image captioning: {e}")
+                    total_failed += 1
+            # Append batch results to file
+            with open(args.output, "a") as f:
+                for result in batch_results:
+                    f.write(json.dumps(result) + "\n")
+
+    print(f"Captioned {total_successful} images to {args.output}")
+    print("Moondream captioning summary:")
+    print(f"  Total attempted: {total_attempted}")
+    print(f"  Successful: {total_successful}")
+    print(f"  Failed: {total_failed}")
     return 0
 
 
