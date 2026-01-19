@@ -35,7 +35,7 @@ def setup_moondream_client(
     """
     if local:
         # Local mode uses localhost, no API key needed
-        return md.vl(api_key="local", base_url="http://localhost:2020/v1")
+        return md.vl(endpoint="http://localhost:2020/v1")
 
     # Cloud mode requires API key
     api_key = api_key or os.getenv("MOONDREAM_API_KEY")
