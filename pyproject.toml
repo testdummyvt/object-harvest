@@ -1,13 +1,14 @@
 [project]
 name = "object-harvest"
-version = "0.6.1"
+version = "0.7.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "click>=8.3.0",
-    "openai>=1.109.1",
-    "pillow>=11.3.0",
+    "click>=8.3.1",
+    "moondream>=0.2.0",
+    "openai>=2.15.0",
+    "pillow>=10.4.0",
     "tqdm>=4.67.1",
 ]
 
@@ -16,17 +17,9 @@ dev = [
     "pytest>=8.0.0",
     "ruff>=0.6.0",
 ]
-torch = [
-    "diffusers",
-    "torch==2.8",
-    "transformers>=4.56.2",
-]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-
-[tool.uv.sources]
-diffusers = { git = "https://github.com/huggingface/diffusers.git" }
 
 [project.scripts]
 obh-detect = "obh.detect:main"
